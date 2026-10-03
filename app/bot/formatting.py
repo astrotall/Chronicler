@@ -11,6 +11,7 @@ from app.config.constants import (
     LINE_SEPARATOR,
     PARAGRAPH_SEPARATOR,
     TELEGRAM_MESSAGE_MAX_CHARS,
+    WEAK_USED_WARNING_RATIO,
     WORD_SEPARATOR,
 )
 from app.domain.draft import Draft, LengthIssue, LengthViolation, PostFormat
@@ -147,15 +148,14 @@ def dispute_reasons(fact: Fact, fact_set: FactSet) -> list[str]:
 
 
 def fact_links(fact: Fact) -> list[str]:
-    seen: list[str] = []
+    weak_by_url: dict[str, bool] = {}
     for ref in fact.support:
-        if ref.url not in seen:
-            seen.append(ref.url)
+        weak_by_url[ref.url] = weak_by_url.get(ref.url, True) and ref.weak
     return [
-        messages.LINK_TEMPLATE.format(
+        (messages.WEAK_LINK_TEMPLATE if weak else messages.LINK_TEMPLATE).format(
             url=escape(url, quote=True), label=escape(url_host(url) or url)
         )
-        for url in seen
+        for url, weak in weak_by_url.items()
     ]
 
 
@@ -266,6 +266,15 @@ def violation_warning(violation: Violation, post_format: PostFormat) -> str:
     )
 
 
+def weak_facts_warning(ready: PostReady) -> str | None:
+    used_ids = set(ready.result.draft.used_fact_ids)
+    used = [fact for fact in ready.fact_set.facts if fact.id in used_ids]
+    weak = sum(fact.weak_only for fact in used)
+    if not used or weak / len(used) <= WEAK_USED_WARNING_RATIO:
+        return None
+    return messages.WEAK_FACTS_TEMPLATE.format(weak=weak, total=len(used))
+
+
 def warnings(ready: PostReady) -> list[str]:
     result = ready.result
     draft = result.draft
@@ -276,6 +285,9 @@ def warnings(ready: PostReady) -> list[str]:
                 required=ready.downgrade.required, assertable=ready.downgrade.assertable
             )
         )
+    weak_note = weak_facts_warning(ready)
+    if weak_note is not None:
+        found.append(weak_note)
     if draft.unverified_numbers:
         found.append(
             messages.UNVERIFIED_NUMBERS_TEMPLATE.format(

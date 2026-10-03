@@ -257,9 +257,10 @@ The full behaviour is in [pipeline.md](pipeline.md), step 3.
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `app/services/facts.py`         | The reply schemas (`ExtractedFacts`, `ConflictReport`), the budget, alias mapping, verification, status, dispute pass, limit and the result |
 | `app/services/quote_check.py`   | Pure functions: text normalisation, `check_quote`, `extract_numbers`, `numbers_supported` |
-| `app/services/source_domain.py` | Pure function `source_domain(url, groups)`; reuses `host_matches` from the research orchestrator |
+| `app/services/source_domain.py` | Pure functions `source_domain(url, groups)` and `is_weak_source(url, weak_domains)`; reuse `host_matches` from the research orchestrator |
+| `app/services/fact_selection.py`| Pure functions: the three-step priority, the per-domain cap, the floor the cap yields to; `select_facts` returns the kept indices and the counts |
 | `app/prompts/fact_extraction.py`| `render_fact_extraction` and `render_dispute_check`                       |
-| `app/domain/fact.py`            | `SourceRef`, `Fact`, `FactStatus`, `Dispute`, `FactSet`, `ExtractionStats`, the two outcomes |
+| `app/domain/fact.py`            | `SourceRef` (with `weak`), `Fact` (with `weak_only`), `FactStatus`, `Dispute`, `FactSet`, `ExtractionStats`, the two outcomes |
 
 - Two `complete_json` calls on the same client: extraction (`FACT_EXTRACTION_MAX_TOKENS`) and the
   contradiction check (`DISPUTE_CHECK_MAX_TOKENS`). Contradictions are the same kind of mechanical

@@ -94,6 +94,7 @@ DISPUTE_REASON_TEMPLATE = "Почему спорно (вместе с {others}):
 UNGROUPED_DISPUTE_REASON_LINE = "Почему спорно: источники расходятся"
 ID_SEPARATOR = ", "
 LINK_TEMPLATE = '<a href="{url}">{label}</a>'
+WEAK_LINK_TEMPLATE = '<a href="{url}">{label}</a> · слабый'
 STATUS_LABELS: dict[FactStatus, str] = {
     FactStatus.CONFIRMED: "подтверждён: разные домены",
     FactStatus.SINGLE: "один источник",
@@ -103,6 +104,10 @@ DISPUTED_STATUS_LABEL = STATUS_LABELS[FactStatus.DISPUTED]
 
 WARNINGS_HEADER = "Предупреждения:"
 WARNING_LINE_TEMPLATE = "- {text}"
+WEAK_FACTS_TEMPLATE = (
+    "{weak} из {total} фактов поста опираются только на слабые источники (они помечены в "
+    "списке фактов). Проверь их перед публикацией."
+)
 UNVERIFIED_NUMBERS_TEMPLATE = "Числа, которых нет в фактах: {numbers}. Проверь их или убери."
 NUMBER_SEPARATOR = ", "
 LENGTH_PART_TEMPLATE = "{part}: {actual} символов при лимите {limit}."

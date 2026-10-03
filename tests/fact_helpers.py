@@ -30,13 +30,28 @@ OTHER_SITE = make_snippet(
     "https://hronos.example.com/kulikovo",
     "По другим оценкам, численность русского войска составляла 150 000 человек.",
 )
+YOUTUBE = make_snippet(
+    "https://m.youtube.com/watch?v=1",
+    "Сражение состоялось 8 сентября 1380 года, рассказывает ведущий.",
+)
+BLOG = make_snippet(
+    "https://User.LiveJournal.com/1.html",
+    "Сражение состоялось 8 сентября 1380 года, пишет автор блога.",
+)
+FOURTH_SITE = make_snippet(
+    "https://other.example.net/a", "Мамай потерпел поражение на Куликовом поле, пишут историки."
+)
 SNIPPETS: list[Snippet] = [RU_WIKI, EN_WIKI, HISTORY_SITE, NEWS_SITE, OTHER_SITE]
+WEAK_SNIPPETS: list[Snippet] = [*SNIPPETS, YOUTUBE, BLOG]
+FOURTH_DOMAIN_SNIPPETS: list[Snippet] = [*SNIPPETS, FOURTH_SITE]
+WEAK_DOMAINS = ("youtube.com", "livejournal.com")
 
 DATE_RU_QUOTE = "Куликовская битва произошла 8 сентября 1380 года"
 DATE_EN_QUOTE = "The Battle of Kulikovo was fought on 8 September 1380"
 DATE_SITE_QUOTE = "Сражение состоялось 8 сентября 1380 года"
 ARMY_60_QUOTE = "Численность русского войска оценивают в 60 000 человек"
 ARMY_150_QUOTE = "численность русского войска составляла 150 000 человек"
+FOURTH_QUOTE = "Мамай потерпел поражение на Куликовом поле"
 WINNER_QUOTE = "Войско Дмитрия Донского разбило войско Мамая"
 
 
@@ -49,6 +64,9 @@ def make_limits(
     domain_groups: tuple[tuple[str, ...], ...] = (
         ("wikipedia.org", "wikimedia.org", "ruwiki.ru", "wikiwand.com"),
     ),
+    weak_domains: tuple[str, ...] = (),
+    max_per_domain: int | None = None,
+    domain_cap_floor: int = 0,
 ) -> FactLimits:
     return FactLimits(
         input_max_chars=input_max_chars,
@@ -56,6 +74,9 @@ def make_limits(
         max_facts=max_facts,
         min_facts=min_facts,
         domain_groups=domain_groups,
+        weak_domains=weak_domains,
+        max_per_domain=max_per_domain,
+        domain_cap_floor=domain_cap_floor,
     )
 
 

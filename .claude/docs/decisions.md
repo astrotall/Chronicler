@@ -35,6 +35,11 @@ closed. A decision on an open question is recorded here in the same change that 
 | The domain filter is in the orchestrator, for all origins | One place, one behaviour. Allow and block lists are empty by default              |
 | Wikipedia language editions are one domain | Translations often copy each other's mistakes, so ru and en Wikipedia do not make a fact `confirmed`. Mirrors (wikimedia.org, ruwiki.ru, wikiwand.com) join them by default |
 | The model groups one claim across snippets, code counts domains | Recognising "the same claim" needs language understanding; counting domains does not |
+| A weak domain is not a blocked domain | `RESEARCH_BLOCKED_DOMAINS` removes a page before extraction. `FACTS_WEAK_DOMAINS` keeps it as a visible source that does not count as independent. Video, blogs, school slides and AI slide makers copy each other, so a pair of them is not a confirmation |
+| Weakness is matched on the host, not on the registrable domain | The domain is the last two labels, so `otvet.mail.ru` would become `mail.ru`. The host keeps the distinction |
+| `confirmed` needs two non-weak domains; weak facts go lower, not out | Dropping them would hide what the sources said. Ordering and the "слабый" mark let the author see and judge |
+| A per-domain cap of 6 of 20, yielding to the larger of the fact and thread minimums | One archive page gave 12 of 20 facts. The floor keeps the cap from turning a thread into a short post |
+| A fact is charged to its least loaded non-weak domain | "First non-weak domain" would push out a confirmed fact because Wikipedia, usually the first support, is full |
 | Domain outside groups is the last two host labels | No public suffix list without a new dependency. Merging `x.co.uk` and `y.co.uk` errs towards `single`; the full host would err towards a false `confirmed` |
 | Snippets are shown to the model as `S1`, `S2`... | A 16-character hash is easy to garble. An unknown label drops the support item, nothing is guessed |
 | Fact text in Russian, quote in the snippet's language | The post is Russian; a translated quote could not be checked. The translation itself is guarded by the number check |
@@ -341,6 +346,46 @@ on the stored facts. One run per topic, noise-level evidence.
   the Soviet thread is a list of ration norms of the Murmansk archive. The Kulikovo thread follows
   the order of events and reads best.
 
+### Weak domains and the domain cap (HIS-28)
+
+- **Why.** Live runs of HIS-8 gave `confirmed` from pairs such as kp.ru and youtube.com, or
+  Wikipedia and a LiveJournal blog, and 12 of 20 facts from one archive page. A manual `long` run on
+  the Soviet daily life topic put 13 of 19 used facts from youtube.com, infourok.ru and
+  slider-ai.ru into the post, with an error and an added flourish built on them.
+- **Default weak list (18).** Video: youtube.com, youtu.be, rutube.ru. Blog hosting: livejournal.com,
+  blogspot.com, wordpress.com, medium.com. Social networks, aggregators and Q&A: vk.com, ok.ru,
+  dzen.ru, pikabu.ru, reddit.com, quora.com, otvet.mail.ru. School presentations: infourok.ru,
+  nsportal.ru, multiurok.ru. AI slide generator: slider-ai.ru. Left out on purpose: sites whose
+  quality varies and for which there was no live data (educational aggregators, essay sites).
+- **The names.** `FACTS_WEAK_DOMAINS` and `FACTS_MAX_PER_DOMAIN` carry the `FACTS_` prefix because
+  they act at fact extraction; `RESEARCH_*` acts before it.
+- **The bot.** A weak link is marked "· слабый". A warning is shown when more than half of the facts
+  used in the post (`WEAK_USED_WARNING_RATIO`) stand on weak sources only: "N из M", no domains,
+  because the facts message already lists them.
+- **Live check (two topics, short, one research and one extraction each, the second column
+  recomputed from the same model replies).**
+
+  | | Soviet daily life 1930s, before / after | Kulikovo, before / after |
+  | --- | --- | --- |
+  | Snippets, of them weak | 35, 3 | 26, 2 |
+  | Verified facts, weak only | 33, 16 | 40, 0 |
+  | Facts shown (20 and disputed) | 22 / 22 | 24 / 24 |
+  | `confirmed` | 0 / 0 | 10 / 9 (one lost to a weak pair) |
+  | Weak-only facts shown | 16 (73%) / 5 (23%) | 0 / 0 |
+  | Domains with a fact | 3 / 6 | 5 / 9 (Wikipedia 17 / 11 of 24) |
+  | Cut by the cap, restored by the floor | 3, 0 | 9, 0 |
+
+  The cap never needed the floor, no run was `InsufficientFacts`, and a thread was still offered
+  in both. Soviet: the 9 infourok.ru facts and 2 of 5 youtube.com facts left the list, replaced
+  by Wikipedia, tass.ru and babel.ua facts; the 3 that stayed fill the places non-weak facts could
+  not (there were not enough of them). Kulikovo: 6 Wikipedia background facts (the route to
+  Kolomna, Sergius of Radonezh, embassies of 1374-1376) gave way to 7 facts of the course of the
+  battle from tass.ru, livingheritage.ru, iz.ru and kp.ru, all `single`. The one `confirmed` fact
+  that became `single` (tatarica.org and a youtube.com page) then fell below the limit. The weak
+  warning did not fire in either run; it is covered by the tests only.
+- **Not decided here.** Weak facts still count as assertable and towards the minimums. A post can be
+  written from weak facts only; the mark and the warning are the only signal.
+
 ### Wikipedia extracts
 
 Source: `list=search` for the top `WIKIPEDIA_MAX_ARTICLES` (2) titles, then one `prop=extracts`
@@ -422,14 +467,19 @@ it is recorded in the "Decided" table.
 
 ### Trusted domains
 
-Which domains count as reliable, which as weak, and whether a weak domain can contribute to
-`confirmed` at all.
+Settled in HIS-28: a configurable list of weak domains (`FACTS_WEAK_DOMAINS`) that do not count
+towards `confirmed` and sort lower, a per-domain cap (`FACTS_MAX_PER_DOMAIN`), and the difference
+from `RESEARCH_BLOCKED_DOMAINS` (see "Weak sources" in [pipeline.md](pipeline.md), step 3, and
+"Weak domains and the domain cap" above).
 
-- Provisional default: all domains are equal, `confirmed` needs 2 distinct domains after the
-  domain rules in [pipeline.md](pipeline.md), step 3.
-- Consequence of leaving it: two content-farm pages that copy each other count as independent.
-- To settle: a config list of trusted and blocked domains, and whether blocked domains are
-  dropped before extraction or only excluded from status counting.
+Still open:
+
+- A positive list of trusted domains, for example whether one trusted source may be enough for
+  `confirmed`. Nothing is built for it.
+- Two non-weak sites that copy each other (a news aggregator and its source) still count as
+  independent. The weak list does not catch them.
+- The weak list is a starting guess, and borderline sites (for example an educational aggregator
+  that showed up in a live `confirmed` fact) are not on it. Tune it from live runs, in `.env`.
 
 ### Web search provider
 

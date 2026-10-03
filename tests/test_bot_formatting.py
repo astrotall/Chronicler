@@ -554,3 +554,94 @@ def test_a_too_short_long_post_names_the_size_and_the_minimum() -> None:
 
     assert "Длина, пост: 640 символов при минимуме 1200, слишком коротко." in text
     assert "Длина, в посте 3 фактов при минимуме 6." in text
+
+
+WEAK_URL = "https://m.youtube.com/watch?v=1"
+
+
+def weak_fact(fact_id: str, *, also_plain: bool = False) -> Fact:
+    support = [
+        SourceRef(snippet_id="s", url=WEAK_URL, domain="youtube.com", quote="цитата", weak=True)
+    ]
+    if also_plain:
+        support.append(source(WIKI_URL))
+    return Fact(id=fact_id, text=f"Факт {fact_id}.", status=FactStatus.SINGLE, support=support)
+
+
+def ready_with(facts: list[Fact], used: list[str]) -> PostReady:
+    fact_set = FactSet(topic="Тема", facts=facts, disputes=[])
+    return make_ready(used=used).model_copy(update={"fact_set": fact_set})
+
+
+def test_a_weak_source_is_marked_next_to_its_link() -> None:
+    ready = ready_with([weak_fact("F1", also_plain=True)], ["F1"])
+
+    [text] = facts_messages(ready)
+
+    assert f'<a href="{WEAK_URL}">m.youtube.com</a> · слабый' in text
+    assert '<a href="https://ru.wikipedia.org/wiki/Битва">ru.wikipedia.org</a>\n' in text + "\n"
+    assert text.count("· слабый") == 1
+
+
+def test_a_plain_source_has_no_weak_mark() -> None:
+    [text] = facts_messages(make_ready())
+
+    assert "слабый" not in text
+
+
+def test_more_than_half_weak_used_facts_give_a_warning_with_counts_only() -> None:
+    ready = ready_with(
+        [weak_fact("F1"), weak_fact("F2"), make_fact("F3", "Обычный.", FactStatus.SINGLE)],
+        ["F1", "F2", "F3"],
+    )
+
+    found = warnings(ready)
+
+    assert messages.WEAK_FACTS_TEMPLATE.format(weak=2, total=3) in found
+    assert "2 из 3" in "\n".join(found)
+    assert "youtube" not in "\n".join(found)
+
+
+def test_exactly_half_weak_used_facts_give_no_warning() -> None:
+    ready = ready_with(
+        [weak_fact("F1"), make_fact("F2", "Обычный.", FactStatus.SINGLE)], ["F1", "F2"]
+    )
+
+    assert warnings(ready) == []
+
+
+def test_a_fact_with_one_plain_source_is_not_counted_as_weak() -> None:
+    ready = ready_with([weak_fact("F1", also_plain=True)], ["F1"])
+
+    assert warnings(ready) == []
+
+
+def test_weak_facts_that_are_not_in_the_post_give_no_warning() -> None:
+    ready = ready_with(
+        [weak_fact("F1"), weak_fact("F2"), make_fact("F3", "Обычный.", FactStatus.SINGLE)],
+        ["F3"],
+    )
+
+    assert warnings(ready) == []
+
+
+def test_a_post_without_used_facts_gives_no_weak_warning() -> None:
+    ready = ready_with([weak_fact("F1")], [])
+
+    assert warnings(ready) == []
+
+
+def test_unknown_used_ids_do_not_count() -> None:
+    ready = ready_with(
+        [weak_fact("F1"), make_fact("F2", "Обычный.", FactStatus.SINGLE)], ["F2", "F9"]
+    )
+
+    assert warnings(ready) == []
+
+
+def test_the_weak_warning_is_sent_among_the_warnings() -> None:
+    ready = ready_with([weak_fact("F1")], ["F1"])
+
+    sent = [message.text for message in post_ready_messages(ready)]
+
+    assert any(messages.WARNINGS_HEADER in text and "1 из 1" in text for text in sent)

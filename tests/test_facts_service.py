@@ -6,6 +6,7 @@ from app.config.constants import (
     DISPUTE_CHECK_MAX_TOKENS,
     FACT_CANDIDATES_MAX,
     FACT_EXTRACTION_MAX_TOKENS,
+    FACTS_DEFAULT_WEAK_DOMAINS,
 )
 from app.domain.fact import (
     ExtractionOutcome,
@@ -35,11 +36,15 @@ from fact_helpers import (
     DATE_EN_QUOTE,
     DATE_RU_QUOTE,
     DATE_SITE_QUOTE,
+    FOURTH_DOMAIN_SNIPPETS,
+    FOURTH_QUOTE,
     HISTORY_SITE,
     NEWS_SITE,
     NO_CONFLICTS,
     RU_WIKI,
     SNIPPETS,
+    WEAK_DOMAINS,
+    WEAK_SNIPPETS,
     WINNER_QUOTE,
     conflict,
     conflicts,
@@ -605,6 +610,17 @@ def test_limits_from_settings() -> None:
         max_facts=20,
         min_facts=3,
         domain_groups=(("wikipedia.org", "wikimedia.org", "ruwiki.ru", "wikiwand.com"),),
+        weak_domains=FACTS_DEFAULT_WEAK_DOMAINS,
+        max_per_domain=6,
+        domain_cap_floor=5,
+    )
+
+
+def test_the_cap_floor_is_the_larger_of_the_fact_and_thread_minimums() -> None:
+    settings = make_settings()
+
+    assert FactLimits.from_settings(settings).domain_cap_floor == max(
+        settings.facts_min_facts, settings.thread_min_facts
     )
 
 
@@ -618,3 +634,239 @@ async def test_candidates_over_the_cap_are_dropped_not_rejected() -> None:
     stats = extracted(result).stats
     assert (stats.candidates, stats.candidates_over_limit) == (FACT_CANDIDATES_MAX, 6)
     assert stats.facts_verified == FACT_CANDIDATES_MAX
+
+
+WEAK_LIMITS = make_limits(weak_domains=WEAK_DOMAINS)
+DATE_ON_SITE_FACT = "Сражение состоялось 8 сентября 1380 года"
+CAP_FACTS = (
+    fact(DATE_ON_SITE_FACT, support("S3", DATE_SITE_QUOTE)),
+    fact(ARMY_60_FACT, support("S3", ARMY_60_QUOTE)),
+    fact(WINNER_FACT, support("S1", WINNER_QUOTE)),
+    fact(DATE_FACT, support("S1", DATE_RU_QUOTE)),
+    fact(ARMY_150_FACT, support("S5", ARMY_150_QUOTE)),
+    fact("Мамай потерпел поражение на Куликовом поле", support("S6", FOURTH_QUOTE)),
+)
+
+
+async def test_two_weak_domains_make_a_fact_single() -> None:
+    result, _ = await run(
+        extraction(fact(DATE_FACT, support("S6", DATE_SITE_QUOTE), support("S7", DATE_SITE_QUOTE))),
+        limits=WEAK_LIMITS,
+        snippets=WEAK_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    [item] = outcome.fact_set.facts
+    assert item.status is FactStatus.SINGLE
+    assert item.weak_only
+    assert [(ref.domain, ref.weak) for ref in item.support] == [
+        ("youtube.com", True),
+        ("livejournal.com", True),
+    ]
+    assert outcome.stats.support_weak == 2
+    assert outcome.stats.facts_weak_only == 1
+    assert outcome.stats.facts_lost_confirmed_by_weak == 1
+
+
+@pytest.mark.parametrize("weak_snippet", ["S6", "S7"])
+async def test_one_independent_domain_and_one_weak_domain_make_a_fact_single(
+    weak_snippet: str,
+) -> None:
+    result, _ = await run(
+        extraction(
+            fact(DATE_FACT, support("S1", DATE_RU_QUOTE), support(weak_snippet, DATE_SITE_QUOTE))
+        ),
+        limits=WEAK_LIMITS,
+        snippets=WEAK_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    [item] = outcome.fact_set.facts
+    assert item.status is FactStatus.SINGLE
+    assert not item.weak_only
+    assert [ref.weak for ref in item.support] == [False, True]
+    assert (outcome.stats.support_weak, outcome.stats.facts_weak_only) == (1, 0)
+    assert outcome.stats.facts_lost_confirmed_by_weak == 1
+
+
+async def test_two_independent_domains_and_a_weak_one_stay_confirmed() -> None:
+    result, _ = await run(
+        extraction(
+            fact(
+                DATE_FACT,
+                support("S1", DATE_RU_QUOTE),
+                support("S3", DATE_SITE_QUOTE),
+                support("S6", DATE_SITE_QUOTE),
+            )
+        ),
+        limits=WEAK_LIMITS,
+        snippets=WEAK_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert outcome.fact_set.facts[0].status is FactStatus.CONFIRMED
+    assert outcome.stats.facts_lost_confirmed_by_weak == 0
+
+
+async def test_without_weak_domains_the_same_pair_is_confirmed() -> None:
+    result, _ = await run(
+        extraction(fact(DATE_FACT, support("S6", DATE_SITE_QUOTE), support("S7", DATE_SITE_QUOTE))),
+        snippets=WEAK_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert outcome.fact_set.facts[0].status is FactStatus.CONFIRMED
+    assert not any(ref.weak for ref in outcome.fact_set.facts[0].support)
+    assert outcome.stats.support_weak == 0
+
+
+async def test_russian_and_english_wikipedia_stay_one_domain_with_weak_domains() -> None:
+    result, _ = await run(
+        extraction(fact(DATE_FACT, support("S1", DATE_RU_QUOTE), support("S2", DATE_EN_QUOTE))),
+        limits=WEAK_LIMITS,
+        snippets=WEAK_SNIPPETS,
+    )
+
+    assert extracted(result).fact_set.facts[0].status is FactStatus.SINGLE
+
+
+async def test_weak_single_facts_go_below_plain_single_facts_but_stay() -> None:
+    result, _ = await run(
+        extraction(
+            fact(DATE_ON_SITE_FACT, support("S6", DATE_SITE_QUOTE)),
+            fact(WINNER_FACT, support("S1", WINNER_QUOTE)),
+            fact(DATE_FACT, support("S1", DATE_RU_QUOTE), support("S3", DATE_SITE_QUOTE)),
+        ),
+        NO_CONFLICTS,
+        limits=WEAK_LIMITS,
+        snippets=WEAK_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert [(item.text, item.status) for item in outcome.fact_set.facts] == [
+        (DATE_FACT, FactStatus.CONFIRMED),
+        (WINNER_FACT, FactStatus.SINGLE),
+        (DATE_ON_SITE_FACT, FactStatus.SINGLE),
+    ]
+    assert outcome.stats.facts_cut_by_limit == 0
+
+
+async def test_a_weak_single_fact_is_the_first_to_be_cut_by_the_limit() -> None:
+    result, _ = await run(
+        extraction(
+            fact(DATE_ON_SITE_FACT, support("S6", DATE_SITE_QUOTE)),
+            fact(WINNER_FACT, support("S1", WINNER_QUOTE)),
+        ),
+        NO_CONFLICTS,
+        limits=make_limits(weak_domains=WEAK_DOMAINS, max_facts=1),
+        snippets=WEAK_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert texts(outcome.fact_set) == [WINNER_FACT]
+    assert outcome.stats.facts_cut_by_limit == 1
+
+
+async def test_a_disputed_weak_fact_is_kept_beyond_the_limit() -> None:
+    result, _ = await run(
+        extraction(
+            fact(WINNER_FACT, support("S1", WINNER_QUOTE)),
+            fact(ARMY_60_FACT, support("S3", ARMY_60_QUOTE)),
+            fact(ARMY_150_FACT, support("S5", ARMY_150_QUOTE)),
+            fact(DATE_ON_SITE_FACT, support("S6", DATE_SITE_QUOTE)),
+        ),
+        conflicts(conflict("C3", "C4")),
+        limits=make_limits(weak_domains=WEAK_DOMAINS, max_facts=1, max_per_domain=1),
+        snippets=WEAK_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert [(item.text, item.status) for item in outcome.fact_set.facts] == [
+        (WINNER_FACT, FactStatus.SINGLE),
+        (ARMY_150_FACT, FactStatus.DISPUTED),
+        (DATE_ON_SITE_FACT, FactStatus.DISPUTED),
+    ]
+
+
+async def test_the_domain_cap_keeps_the_top_facts_of_each_domain() -> None:
+    result, _ = await run(
+        extraction(*CAP_FACTS),
+        NO_CONFLICTS,
+        limits=make_limits(max_per_domain=1),
+        snippets=FOURTH_DOMAIN_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert texts(outcome.fact_set) == [
+        DATE_ON_SITE_FACT,
+        WINNER_FACT,
+        ARMY_150_FACT,
+        "Мамай потерпел поражение на Куликовом поле",
+    ]
+    assert outcome.stats.facts_cut_by_domain_cap == 2
+    assert outcome.stats.facts_cut_by_limit == 0
+    assert outcome.stats.facts_domain_cap_restored == 0
+
+
+async def test_without_a_cap_every_fact_stays() -> None:
+    result, _ = await run(extraction(*CAP_FACTS), NO_CONFLICTS, snippets=FOURTH_DOMAIN_SNIPPETS)
+
+    outcome = extracted(result)
+    assert len(outcome.fact_set.facts) == len(CAP_FACTS)
+    assert outcome.stats.facts_cut_by_domain_cap == 0
+
+
+async def test_a_fact_on_two_domains_is_charged_to_the_one_with_room() -> None:
+    result, _ = await run(
+        extraction(
+            fact(DATE_FACT, support("S1", DATE_RU_QUOTE), support("S3", DATE_SITE_QUOTE)),
+            fact(WINNER_FACT, support("S1", WINNER_QUOTE), support("S3", DATE_SITE_QUOTE)),
+            fact(ARMY_60_FACT, support("S1", WINNER_QUOTE), support("S3", ARMY_60_QUOTE)),
+        ),
+        NO_CONFLICTS,
+        limits=make_limits(max_per_domain=1),
+    )
+
+    outcome = extracted(result)
+    assert texts(outcome.fact_set) == [DATE_FACT, WINNER_FACT]
+    assert outcome.stats.facts_cut_by_domain_cap == 1
+
+
+async def test_the_cap_yields_down_to_the_minimum_so_the_result_is_not_insufficient() -> None:
+    result, _ = await run(
+        extraction(*CAP_FACTS),
+        NO_CONFLICTS,
+        limits=make_limits(max_per_domain=1, min_facts=5),
+        snippets=FOURTH_DOMAIN_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert len(outcome.fact_set.facts) == 5
+    assert outcome.stats.facts_domain_cap_restored == 1
+    assert outcome.stats.facts_cut_by_domain_cap == 1
+    assert texts(outcome.fact_set)[:2] == [DATE_ON_SITE_FACT, ARMY_60_FACT]
+
+
+async def test_the_cap_yields_down_to_the_thread_minimum() -> None:
+    result, _ = await run(
+        extraction(*CAP_FACTS),
+        NO_CONFLICTS,
+        limits=make_limits(max_per_domain=1, min_facts=3, domain_cap_floor=5),
+        snippets=FOURTH_DOMAIN_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert len(outcome.fact_set.facts) == 5
+    assert outcome.stats.facts_domain_cap_restored == 1
+
+
+async def test_a_set_that_is_short_without_the_cap_is_still_insufficient() -> None:
+    result, _ = await run(
+        extraction(*CAP_FACTS[:2]),
+        NO_CONFLICTS,
+        limits=make_limits(max_per_domain=1, min_facts=3),
+        snippets=FOURTH_DOMAIN_SNIPPETS,
+    )
+
+    assert isinstance(result, InsufficientFacts)
+    assert result.assertable_count == 2

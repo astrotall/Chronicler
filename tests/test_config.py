@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from app.config.constants import FACTS_DEFAULT_WEAK_DOMAINS
 from app.config.settings import Settings
 from pydantic import ValidationError
 
@@ -115,6 +116,35 @@ def test_facts_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.facts_domain_groups == [
         ["wikipedia.org", "wikimedia.org", "ruwiki.ru", "wikiwand.com"]
     ]
+
+
+def test_facts_weak_domain_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = facts_env(monkeypatch)
+
+    assert settings.facts_max_per_domain == 6
+    assert tuple(settings.facts_weak_domains) == FACTS_DEFAULT_WEAK_DOMAINS
+    assert len(settings.facts_weak_domains) == 18
+    assert {"youtube.com", "otvet.mail.ru", "slider-ai.ru"} <= set(settings.facts_weak_domains)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (" YouTube.com, vk.com ,,", ["youtube.com", "vk.com"]),
+        ("vk.com", ["vk.com"]),
+        ("", []),
+        (" , ", []),
+    ],
+)
+def test_facts_weak_domains_are_parsed(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: list[str]
+) -> None:
+    assert facts_env(monkeypatch, FACTS_WEAK_DOMAINS=raw).facts_weak_domains == expected
+
+
+def test_facts_max_per_domain_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValidationError):
+        facts_env(monkeypatch, FACTS_MAX_PER_DOMAIN="0")
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 import pytest
 from app.config.constants import FACTS_DEFAULT_DOMAIN_GROUPS
-from app.services.source_domain import source_domain
+from app.services.source_domain import is_weak_source, source_domain
 
 
 @pytest.mark.parametrize(
@@ -47,3 +47,36 @@ def test_a_custom_group_merges_its_members_and_their_subdomains() -> None:
     assert source_domain("https://www.britannica.co.uk/a", groups) == "britannica.com"
     assert source_domain("https://kids.britannica.com/a", groups) == "britannica.com"
     assert source_domain("https://notbritannica.com/a", groups) == "notbritannica.com"
+
+
+WEAK = ("youtube.com", "livejournal.com", "otvet.mail.ru", "infourok.ru")
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://youtube.com/watch?v=1", True),
+        ("https://www.youtube.com/watch?v=1", True),
+        ("https://m.youtube.com/watch?v=1", True),
+        ("https://WWW.YouTube.COM/watch?v=1", True),
+        ("https://www.livejournal.com/a", True),
+        ("https://user.livejournal.com/a", True),
+        ("https://otvet.mail.ru/question/1", True),
+        ("https://infourok.ru/x.html", True),
+        ("https://notyoutube.com/a", False),
+        ("https://youtube.com.example.org/a", False),
+        ("https://news.mail.ru/a", False),
+        ("https://mail.ru/a", False),
+        ("https://ru.wikipedia.org/wiki/X", False),
+    ],
+)
+def test_weak_sources_match_the_host_or_its_subdomains(url: str, expected: bool) -> None:
+    assert is_weak_source(url, WEAK) is expected
+
+
+def test_an_empty_weak_list_marks_nothing() -> None:
+    assert is_weak_source("https://youtube.com/watch", ()) is False
+
+
+def test_weak_entries_are_normalised() -> None:
+    assert is_weak_source("https://youtube.com/watch", ("WWW.YouTube.com.",)) is True
