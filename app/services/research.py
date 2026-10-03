@@ -43,6 +43,10 @@ class ResearchService:
         self._sources = list(sources)
         self._limits = limits
 
+    @property
+    def source_names(self) -> list[str]:
+        return [source.name for source in self._sources]
+
     async def research(self, queries: Sequence[str]) -> ResearchResult:
         semaphore = asyncio.Semaphore(self._limits.max_concurrency)
         outcomes = await asyncio.gather(

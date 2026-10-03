@@ -9,6 +9,8 @@ from app.bot.messages import START_TEXT
 from app.config.settings import Settings
 from app.main import build_dispatcher
 
+from pipeline_helpers import Clients, make_pipeline
+
 MESSAGE_DATE = datetime(2026, 1, 1, tzinfo=UTC)
 OWNER_ID = 42
 STRANGER_ID = 1000
@@ -40,7 +42,7 @@ def bot_call(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 
 async def test_owner_gets_a_reply(monkeypatch: pytest.MonkeyPatch, bot_call: AsyncMock) -> None:
-    dispatcher = build_dispatcher(make_settings(monkeypatch))
+    dispatcher = build_dispatcher(make_settings(monkeypatch), make_pipeline(Clients()))
     bot = Bot(token=FAKE_TOKEN)
 
     await dispatcher.feed_update(bot, make_update(OWNER_ID, "/start"))
@@ -53,7 +55,7 @@ async def test_owner_gets_a_reply(monkeypatch: pytest.MonkeyPatch, bot_call: Asy
 
 
 async def test_stranger_gets_no_reply(monkeypatch: pytest.MonkeyPatch, bot_call: AsyncMock) -> None:
-    dispatcher = build_dispatcher(make_settings(monkeypatch))
+    dispatcher = build_dispatcher(make_settings(monkeypatch), make_pipeline(Clients()))
     bot = Bot(token=FAKE_TOKEN)
 
     await dispatcher.feed_update(bot, make_update(STRANGER_ID, "/start"))

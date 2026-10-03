@@ -23,6 +23,8 @@ from app.config.constants import (
     FACTS_DOMAIN_MEMBERS_SEPARATOR,
     LONG_DEFAULT_MAX_CHARS,
     OWNER_IDS_SEPARATOR,
+    PIPELINE_DEFAULT_TIMEOUT_SECONDS,
+    POST_DEFAULT_FORMAT,
     RESEARCH_DEFAULT_CONNECT_TIMEOUT_SECONDS,
     RESEARCH_DEFAULT_MAX_CONCURRENCY,
     RESEARCH_DEFAULT_READ_TIMEOUT_SECONDS,
@@ -32,6 +34,7 @@ from app.config.constants import (
     SHORT_DEFAULT_MAX_CHARS,
     SHORT_DEFAULT_MAX_FACTS,
     SHORT_DEFAULT_SENTENCE_CHARS,
+    STATE_DEFAULT_MAX_RUNS,
     STYLE_DEFAULT_CRITIC_ENABLED,
     STYLE_DEFAULT_CRITIC_MAX_FINDINGS,
     STYLE_DEFAULT_MAX_REGENERATIONS,
@@ -40,6 +43,7 @@ from app.config.constants import (
     TAVILY_MAX_CHUNKS_PER_SOURCE,
     TAVILY_MAX_RESULTS_LIMIT,
     THREAD_DEFAULT_MAX_TWEETS,
+    THREAD_DEFAULT_MIN_FACTS,
     THREAD_MIN_TWEETS,
     THREAD_NUMBERING_TEMPLATE,
     THREAD_TWEET_DEFAULT_MAX_CHARS,
@@ -51,6 +55,7 @@ from app.config.constants import (
 )
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+type PostFormatName = Literal["short", "long", "thread"]
 
 
 class StepRoute(BaseModel):
@@ -147,6 +152,11 @@ class Settings(BaseSettings):
     style_max_regenerations: int = Field(default=STYLE_DEFAULT_MAX_REGENERATIONS, ge=0)
     style_critic_max_findings: int = Field(default=STYLE_DEFAULT_CRITIC_MAX_FINDINGS, ge=1)
 
+    post_default_format: PostFormatName = POST_DEFAULT_FORMAT
+    thread_min_facts: int = Field(default=THREAD_DEFAULT_MIN_FACTS, ge=1)
+    pipeline_timeout_seconds: float = Field(default=PIPELINE_DEFAULT_TIMEOUT_SECONDS, gt=0)
+    state_max_runs: int = Field(default=STATE_DEFAULT_MAX_RUNS, ge=1)
+
     @field_validator("owner_telegram_ids", mode="before")
     @classmethod
     def split_owner_ids(cls, value: object) -> object:
@@ -204,6 +214,7 @@ class Settings(BaseSettings):
         "llm_writing_provider",
         "llm_style_critique_provider",
         "tavily_search_depth",
+        "post_default_format",
         mode="before",
     )
     @classmethod
