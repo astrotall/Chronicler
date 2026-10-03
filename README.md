@@ -14,8 +14,11 @@ verifies the links in between.
 1. **Plan queries.** From the topic the model produces 3-5 search queries, in Russian and
    English.
 2. **Research.** Sources return snippets for each query.
-3. **Extract facts.** The model pulls atomic facts, each with a verbatim quote from a snippet.
-   Code checks the quote really occurs in the snippet text; a fact that fails is dropped.
+3. **Extract facts.** The model pulls atomic facts in Russian, each with verbatim quotes from
+   the snippets. Code checks every quote really occurs in its snippet and every number of a fact
+   occurs in its quotes; what fails is dropped. Code marks a fact `confirmed` (2+ independent
+   domains) or `single`, a second model pass finds contradictions, and those facts become
+   `disputed`. Too few facts is a result shown to the author, not a guess.
 4. **Write.** The model writes the post strictly from the facts. Code checks that every number
    and date in the post appears among the facts.
 5. **Filter style.** Deterministic style checks, then an LLM critic pass. On a violation the post
@@ -47,8 +50,9 @@ data/
 
 At the moment `app/` holds settings, an owner-only bot with `/start` and a stub for plain text,
 the LLM client (`app/llm`, DeepSeek and Anthropic), the research sources (`app/research`,
-Wikipedia and Tavily), query planning and the research orchestrator (`app/services`). The facts,
-writing and style steps are not built yet.
+Wikipedia and Tavily), query planning, the research orchestrator and fact extraction
+(`app/services`). The writing and style steps are not built yet, and the bot does not run the
+pipeline yet.
 
 ## Running
 
@@ -150,6 +154,23 @@ Live tests call Wikipedia (no key needed) and, if `TAVILY_API_KEY` is set, Tavil
 
 ```bash
 uv run pytest tests/test_research_live.py -m integration
+```
+
+### Fact extraction
+
+| Variable                 | Meaning                                                                   |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `FACTS_INPUT_MAX_CHARS`  | Total snippet text shown to the model, 60000 by default. Longer snippets are cut to a common cap |
+| `FACTS_MIN_QUOTE_CHARS`  | Shortest quote that counts as support, 20 by default                      |
+| `FACTS_MAX_FACTS`        | Most facts kept, 20 by default. Disputed facts are kept on top of it      |
+| `FACTS_MIN_FACTS`        | Fewest facts that can be stated for a post, 3 by default. Must not exceed `FACTS_MAX_FACTS` |
+| `FACTS_DOMAIN_GROUPS`    | Domains counted as one source: members separated by `,`, groups by `;`. Default `wikipedia.org,wikimedia.org,ruwiki.ru,wikiwand.com`. Empty means no groups |
+
+The live test sends two Wikipedia articles from `tests/fixtures` to DeepSeek and checks that
+verified facts come out; it needs `DEEPSEEK_API_KEY`:
+
+```bash
+uv run pytest tests/test_facts_live.py -m integration -o log_cli=true --log-cli-level=INFO
 ```
 
 ## Before committing

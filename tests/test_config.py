@@ -95,3 +95,52 @@ def test_loads_from_env_file(tmp_path: Path) -> None:
     settings = Settings(_env_file=env_file)
 
     assert settings.owner_telegram_ids == [7, 8]
+
+
+def facts_env(monkeypatch: pytest.MonkeyPatch, **values: str) -> Settings:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
+    monkeypatch.setenv("OWNER_TELEGRAM_IDS", "42")
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    return Settings(_env_file=None)
+
+
+def test_facts_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = facts_env(monkeypatch)
+
+    assert settings.facts_input_max_chars == 60000
+    assert settings.facts_min_quote_chars == 20
+    assert settings.facts_max_facts == 20
+    assert settings.facts_min_facts == 3
+    assert settings.facts_domain_groups == [
+        ["wikipedia.org", "wikimedia.org", "ruwiki.ru", "wikiwand.com"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("a.org, B.org ; c.org;;", [["a.org", "b.org"], ["c.org"]]),
+        ("wikipedia.org", [["wikipedia.org"]]),
+        ("", []),
+        (" ; , ", []),
+    ],
+)
+def test_facts_domain_groups_are_parsed(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: list[list[str]]
+) -> None:
+    assert facts_env(monkeypatch, FACTS_DOMAIN_GROUPS=raw).facts_domain_groups == expected
+
+
+def test_facts_minimum_above_maximum_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValidationError, match="FACTS_MIN_FACTS"):
+        facts_env(monkeypatch, FACTS_MIN_FACTS="5", FACTS_MAX_FACTS="4")
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["FACTS_INPUT_MAX_CHARS", "FACTS_MIN_QUOTE_CHARS", "FACTS_MAX_FACTS", "FACTS_MIN_FACTS"],
+)
+def test_facts_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    with pytest.raises(ValidationError):
+        facts_env(monkeypatch, **{name: "0"})
