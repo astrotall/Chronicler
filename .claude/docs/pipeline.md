@@ -177,8 +177,9 @@ job. An empty `FactSet` is a `ValueError` before any call.
   3. If no fact to state was picked and no unit fits, the first unit is taken whole, over the
      limit: a dispute is never given half.
   The prompt gets only the selection; the `FactSet` itself does not change, so the author still
-  sees every fact and every dispute. `used_fact_ids` and the number check still use the whole
-  `FactSet`. A consequence: every angle ("другой заход") of a short post gets the same facts.
+  sees every fact and every dispute. The number check still uses the whole `FactSet`; the
+  disputed part of `used_fact_ids` uses only the selection (see "Used facts" below). A
+  consequence: every angle ("другой заход") of a short post gets the same facts.
 - **Disputed facts are a separate block.** A fact is disputed if its status is `disputed` or it
   belongs to a `Dispute`. Such facts are shown only under the disputed header, grouped by
   dispute with its explanation, and never in the block of facts to state. The prompt asks for
@@ -191,7 +192,22 @@ job. An empty `FactSet` is a `ValueError` before any call.
 - **Reply.** `{fact_ids, text}` for `short` and `long`, `{fact_ids, tweets}` for `thread` (2 or
   more tweets). `fact_ids` comes first, so the model picks its facts before it writes, and the
   text is the last field. Ids are matched like snippet labels (trimmed, square brackets dropped,
-  case ignored); unknown ids are dropped and counted, repeated ones are kept once.
+  case ignored); unknown ids are dropped and counted, repeated ones are kept once. The prompt asks
+  the model to list the disputed facts it mentions as well.
+- **Used facts (`used_fact_ids`).** The ids the model reported, in its order, then the disputed
+  facts that code finds, in `FactSet` order (`app/services/disputes.py`). The bot marks disputed
+  facts by this list, so a dispute stated in the text must not depend on the model reporting it.
+  1. Candidates are the disputed facts of the set that went into the prompt: the selection for
+     `short`, the whole `FactSet` for `long` and `thread`. A disputed fact is one with status
+     `disputed` or in a `Dispute`.
+  2. A candidate is found if it has numbers (`extract_numbers`) and all of them are among the
+     numbers of the `text` of all parts together. Numbering prefixes are not part of `text`. A
+     candidate with no numbers is never found, only reported by the model.
+  3. Every `Dispute` group that has a reported or found fact is completed with the rest of its
+     members that went into the prompt: a dispute is never marked by half. Overlapping groups
+     merge, as in the short selection. A disputed fact outside any group is not completed.
+  4. The text checked is the final one: after a retry or a tail drop, not the text of the first
+     attempt.
 - **Length.** Code counts `len()` of each part as delivered, numbering included. Limits:
   `SHORT_MAX_CHARS` (280), `LONG_MAX_CHARS` (25000), `THREAD_TWEET_MAX_CHARS` (280) per tweet and
   `THREAD_MAX_TWEETS` (12). If a part of a `long` post or a thread is too long or a thread has too
@@ -213,8 +229,9 @@ job. An empty `FactSet` is a `ValueError` before any call.
   `length_violations` is recomputed on the kept text. It is never applied when the post contains a
   number of any disputed fact (`extract_numbers`), because the drop could leave one version of a
   dispute without the other; the draft then stays whole with `length_violations`.
-  `used_fact_ids` stays what the model reported for the full text, so after a drop it may name
+  The ids the model reported stay as reported for the full text, so after a drop they may name
   facts that are no longer in the post; the bot has to say so next to a non-empty `dropped_tail`.
+  The disputed facts that code adds are computed on the kept text.
 - **Sentence boundaries** (for the retry and the drop): `.`, `!`, `?` or `…`, optional closing
   quotes, whitespace, then an uppercase letter, a digit or an opening quote. A point after a
   one-letter word (initials, `г.`) or after a word in `SENTENCE_ABBREVIATIONS` is not a boundary.

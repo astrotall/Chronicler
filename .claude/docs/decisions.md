@@ -55,6 +55,8 @@ closed. A decision on an open question is recorded here in the same change that 
 | Length: one retry with the exact problems, then deliver marked | See "Length limits" below. For `long` and `thread`; a short post has its own rules, see "Short post length" |
 | A short post is written from at most `SHORT_MAX_FACTS` (3) facts picked by code | The model was asked to fit 6 to 10 facts into room for 2 or 3 and used 6 to 8. See "Short post length" below |
 | Short selection: `confirmed` before `single`, `FactSet` order, a dispute only whole | Code, no LLM. The extraction order puts core facts first; fact length would favour side details. Half a dispute would state one version as established |
+| Disputed facts a draft states are added to `used_fact_ids` by code | The model left both numbers of a dispute out of `fact_ids` in 3 of 4 Kulikovo threads, so the bot would have shown the dispute unmarked. See "Used facts and disputes" below |
+| A dispute is marked whole in `used_fact_ids` | Marking one version as used and not the other would show half a dispute as ordinary |
 | Short budget in sentences derived from the limit, not "aim below" | A model does not count characters. `SHORT_MAX_CHARS // SHORT_SENTENCE_CHARS` sentences of up to `SHORT_SENTENCE_CHARS` characters |
 | Short retry quotes the sentences to cut and the excess, up to 2 retries | "Shorten it" made the model rewrite and sometimes grow the text. `SHORT_LENGTH_RETRIES`; `long` and `thread` keep one retry |
 | Tail drop of a short post exists but is off by default | See "Short post length" below |
@@ -93,6 +95,42 @@ two samples per topic and format, before and after, no examples in both:
   is a separate problem, addressed in HIS-22 (see "Short post length").
 
 Two samples per cell are noise-level evidence. The voice is still meant to come from the examples.
+
+### Used facts and disputes
+
+Found in the HIS-21 live runs: in 3 of 4 Kulikovo threads the text named both disputed numbers
+(60 000 and 150 000) and the model did not list the disputed facts in `fact_ids`. The number check
+passes this, because it compares with the texts of all facts. The bot (HIS-8) marks disputed facts
+in its reply with "СПОРНО"; if it relied on `used_fact_ids`, the dispute would go out unmarked.
+HIS-23 decided:
+
+- **Code finds the disputed facts a draft uses.** `used_fact_ids` is what the model reported (after
+  the usual normalisation, unknown ids dropped) plus the disputed facts found by code. A disputed
+  fact is found when it has numbers and all of them are in the numbers of the draft's `text` parts
+  (no numbering prefixes). The prompt also asks the model to list the disputed facts it mentions;
+  that lowers the load on the code check and is the only way for a fact without numbers to count.
+- **A dispute is completed whole.** If a reported or found fact belongs to a `Dispute`, the other
+  members of the group that went into the prompt are added. Overlapping groups are one unit, the
+  same rule as in the short selection. A disputed fact with no group stands alone.
+- **Order.** The model's ids keep the model's order, as before, so the behaviour for facts that
+  are not disputed is unchanged. The ids code adds follow after them in `FactSet` order.
+- **Short posts: the check runs against the selection, not the whole `FactSet`.** A fact the model
+  never saw cannot be a fact the post states. If the whole set were checked, a short post that
+  happens to contain "60 000" would mark a dispute the prompt did not contain, and the number
+  could only have come from the model's own knowledge. For `long` and `thread` the selection is
+  the whole set. An id the model itself reports for a fact outside the selection is still kept:
+  that is the older behaviour, pinned by a test, and it is not new code's decision.
+- **Known limits, accepted:**
+  - A disputed fact without numbers is used only if the model names it, or through its group if a
+    numbered member of the group is used. A dispute stated in words only (`расходятся`) is not
+    detected.
+  - The comparison is by number, so a number written in words or as a Roman numeral is not seen
+    (the limits of "Matching numbers and dates" apply). Approximate wording does not matter.
+  - A disputed fact whose numbers are all shared with other facts (for example only a year) is
+    found whenever the text states that year. This errs towards an extra "СПОРНО" mark, which is
+    the safe side.
+  - After a tail drop, the model's ids still describe the full text (see "Short post length"); the
+    disputed facts added by code describe the kept text.
 
 ### Short post length
 
