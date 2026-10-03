@@ -1,8 +1,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from aiogram.types import Message
-from app.bot.handlers import handle_start, handle_topic
-from app.bot.messages import START_TEXT
+from app.bot.handlers import handle_hint, handle_start
+from app.bot.messages import INPUT_HINT_TEXT, START_TEXT
 
 
 def make_message(text: str | None) -> MagicMock:
@@ -20,17 +20,9 @@ async def test_start_replies_with_description() -> None:
     message.answer.assert_awaited_once_with(START_TEXT)
 
 
-async def test_topic_is_echoed_by_the_stub() -> None:
-    message = make_message("Падение Константинополя")
+async def test_the_hint_shows_how_to_send_a_topic() -> None:
+    message = make_message(None)
 
-    await handle_topic(message)
+    await handle_hint(message)
 
-    message.answer.assert_awaited_once_with("got topic: Падение Константинополя")
-
-
-async def test_topic_with_braces_is_echoed_verbatim() -> None:
-    message = make_message("{topic} {0}")
-
-    await handle_topic(message)
-
-    message.answer.assert_awaited_once_with("got topic: {topic} {0}")
+    message.answer.assert_awaited_once_with(INPUT_HINT_TEXT)

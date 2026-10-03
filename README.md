@@ -56,11 +56,11 @@ data/
   docs/             pipeline, style rules, architecture, decisions
 ```
 
-At the moment `app/` holds settings, an owner-only bot with `/start` and a stub for plain text,
-the LLM client (`app/llm`, DeepSeek and Anthropic), the research sources (`app/research`,
-Wikipedia and Tavily), query planning, the research orchestrator and fact extraction
-(`app/services`), the writing step with the few-shot loader, and the style filter with the critic
-and the regeneration loop. The bot does not run the pipeline yet.
+At the moment `app/` holds settings, the owner-only bot, the LLM client (`app/llm`, DeepSeek and
+Anthropic), the research sources (`app/research`, Wikipedia and Tavily), and in `app/services`
+every pipeline step and the orchestration between them (`app/services/pipeline.py`). The bot runs
+the whole pipeline: a topic in, a post with its facts and sources out. State is kept in memory;
+SQLite comes later.
 
 ## Running
 
@@ -86,7 +86,69 @@ clone.
 | `LOG_LEVEL`          | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`, default `INFO`  |
 
 A missing or invalid variable stops the start with a message naming it. Updates from any other
-Telegram ID are ignored without a reply and logged as one line without the message text.
+Telegram ID are ignored without a reply and logged as one line without the message text. How to
+use the bot is in "Using the bot" below.
+
+### Using the bot
+
+Fill in `.env` (below), then `make run`. The bot answers only the Telegram IDs in
+`OWNER_TELEGRAM_IDS`; it never publishes anything.
+
+**Send a topic** as a plain message: `Куликовская битва`. By default the bot writes a short post
+(`POST_DEFAULT_FORMAT`). Start the message with a prefix for another format: `тред: Куликовская
+битва`, `лонг: ...`, `коротко: ...`. A command other than `/start` and a message without text
+(photo, sticker, voice, file) get a hint; a message over 500 characters is refused as not a topic.
+
+**While it works** one message shows the stage (planning, sources, facts, writing, style check) and
+disappears when the post arrives. One request runs at a time: a new topic or a button in the
+meantime is answered "ещё работаю" and dropped. A run longer than `PIPELINE_TIMEOUT_SECONDS` is
+cancelled with a message.
+
+**What comes back**, in this order:
+
+1. The post as plain text, ready to copy; a thread comes as one message per tweet. A long post over
+   Telegram's 4096 characters comes in several messages, split between paragraphs.
+2. Warnings, only if there are any: numbers in the post that are not among the facts, a length
+   over the limit, style violations the filter could not remove (rule, fragment, explanation), the
+   critic did not check the text, a regeneration failed and the best version is shown, the end of
+   the post was cut, or a thread became a short post because there were too few facts.
+3. The facts: each with its id, its status and links to its sources. "подтверждён" means two or
+   more independent domains, "один источник" one domain, **СПОРНО** that the sources contradict
+   each other, with the reason. The first answer lists the facts used in the post and the rest
+   separately, plus the sources that did not answer, if any.
+
+**Buttons** under the post never search again; they rewrite from the same facts, and every new
+version goes through the style check:
+
+| Button        | Effect                                                                     |
+| ------------- | -------------------------------------------------------------------------- |
+| короче        | A shorter version, same format and angle                                   |
+| в тред        | The same facts as a thread. Shown only with at least `THREAD_MIN_FACTS` facts that can be stated |
+| другой заход  | Another angle (a person, a detail or number, a place, two facts side by side) and another first sentence. A short post keeps the same 3 facts |
+| ещё вариант   | The same angle in other words                                              |
+
+Under a new version only its facts are listed. After a restart old buttons answer that they are
+stale: send the topic again.
+
+**When nothing comes out** the progress message turns into the reason: no source enabled, all
+sources down, nothing found, too few facts (with the counts and the facts found), or a step that
+failed (which one and why in a phrase).
+
+| Variable                   | Meaning                                                              |
+| -------------------------- | -------------------------------------------------------------------- |
+| `POST_DEFAULT_FORMAT`      | `short` (default), `long` or `thread`, for a topic without a prefix  |
+| `THREAD_MIN_FACTS`         | Fewest facts that can be stated for a thread, 5 by default; fewer gives a short post |
+| `PIPELINE_TIMEOUT_SECONDS` | Longest run of a topic or a button, 600 by default                   |
+| `STATE_MAX_RUNS`           | Topics whose facts are kept for the buttons, 20 by default           |
+
+The live test runs the whole pipeline without Telegram on two topics (a short post, then "в
+тред"), on DeepSeek, Tavily and Wikipedia; it needs `DEEPSEEK_API_KEY`, `TAVILY_API_KEY` and
+`WIKIPEDIA_CONTACT` and costs up to 10 Tavily credits. Counters, texts and the messages as the
+author sees them go to `data/comparisons/his8_*.json`:
+
+```bash
+uv run pytest tests/test_pipeline_live.py -m integration -o log_cli=true --log-cli-level=INFO
+```
 
 ### LLM providers
 

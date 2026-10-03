@@ -79,6 +79,17 @@ closed. A decision on an open question is recorded here in the same change that 
 | No deterministic triplet check | A list of names from the facts is legitimate. The critic checks rhetorical triplets only |
 | Phrase matching by stems, no morphology library | No new dependency. Words in `BANNED_PHRASE_EXACT_WORDS` match whole, against false positives such as "в заключении мира" |
 | "не просто X, а Y" banned with or without "это" | The author's decision: "Он был не просто город, а крепость" is the same frame |
+| Default format `short` (`POST_DEFAULT_FORMAT`) | The cheapest first answer, and the only one under which all four buttons make sense. A prefix `тред:`, `лонг:`, `коротко:` picks another format for one topic |
+| A thread needs `THREAD_MIN_FACTS` (5) assertable facts | From 3 facts a thread is 2 tweets, not a thread. Below the threshold a short post is written and the author is told; "в тред" is not offered. See "Bot delivery" below |
+| The post goes out as plain text, the facts as escaped HTML | The post must copy without markup. The facts need links; HTML with `html.escape` keeps them short, and facts are split only between whole facts |
+| A long post over 4096 characters is split, not sent as a file | Copying from a file is clumsy on a phone. Paragraphs, then sentences, then spaces; nothing is added to the pieces |
+| State in memory behind the `RunStore` Protocol, `STATE_MAX_RUNS` (20) runs | No database yet (locked). HIS-9 replaces the store with SQLite without touching the pipeline or the handlers |
+| Draft ids are random, not counters | After a restart a counter would map an old button onto a new draft. A random id misses and the author is told the buttons are stale |
+| One job per user, a new request during it is refused, not queued | One author; a queue would hide that a long run is still going. Buttons are answered at once |
+| A run is cancelled after `PIPELINE_TIMEOUT_SECONDS` (600) | See "Bot delivery" below |
+| A topic is at most `TOPIC_MAX_CHARS` (500) characters; commands and non-text messages get a hint | The topic goes into prompts and, through the plan, into search queries. A pasted article is an input error, not a topic |
+| "другой заход" rotates through fixed angles in `app/prompts/revisions.py` | An extra model call to invent an angle costs a call and is unpredictable. Each angle says it shapes only presentation and order |
+| The topic is logged by length only | It is the author's data, like the post |
 
 ## Details of decided questions
 
@@ -225,6 +236,68 @@ Known gaps, accepted:
 - `EMOJI_RANGES` is a list of blocks, not the full emoji definition; dingbats such as ✓ count as
   emoji.
 - Hook, rhythm and thread structure are not checked at all.
+
+### Bot delivery
+
+HIS-8 connected the steps in Telegram (see [pipeline.md](pipeline.md), step 6).
+
+- **Thread threshold.** A thread is 2 to 12 tweets; with the facts minimum of 3 a thread could be
+  2 tweets of one or two facts each. 5 assertable facts give 3 or 4 tweets with room for related
+  facts to share one. Disputed facts do not count: they can be mentioned only cautiously. This
+  closes "fewer facts than a thread needs" from the failure behaviour: a short post instead, with
+  a warning, rather than asking the author.
+- **Timeout.** 600 seconds by default. The live runs below took 26 to 28 s for a topic and 11 to
+  15 s for a button, so 600 s is far above a normal run. It is not lower because a single LLM
+  attempt may legitimately take up to `LLM_ATTEMPT_TIMEOUT_SECONDS` (300): a total below that
+  would cancel a run in which one call was slow but succeeded.
+- **Facts after a button.** Only the facts of the new variant, with their sources and "СПОРНО",
+  and a line with the number of the others. The full list is in the first answer and does not
+  change; repeating 20 facts on every click buries the post. The author's decision.
+- **Progress message** is deleted after a post and turned into the final message otherwise. The
+  author's decision.
+- **Known limits.**
+  - A short post is always written from the same 3 facts (`select_short_facts`), so "другой
+    заход" of a short post changes the presentation and the first sentence, not the facts.
+    HIS-25 is to change the selection.
+  - A fact block longer than 4096 characters (a fact text near that size) would not be split
+    inside and Telegram would reject it; real facts are one or two sentences.
+  - Stored runs live in process memory: a restart loses them and the buttons answer "устарели".
+  - A button keeps working on any earlier variant while its run is stored; the drafts of one run
+    are capped at 30, the oldest dropped first.
+  - The timeout counts only the pipeline, not sending the messages.
+
+### Live runs of the whole pipeline (HIS-8)
+
+`tests/test_pipeline_live.py`, DeepSeek on every step, Tavily `basic`, both Wikipedias, the author
+examples, default settings. Per topic: one topic run (short by default), then the "в тред" button
+on the stored facts. One run per topic, noise-level evidence.
+
+| Measure                              | "Обычный день советского человека в 1930-е" | "Куликовская битва" |
+| ------------------------------------ | ------------------------------------------- | ------------------- |
+| Snippets (ru wiki / en wiki / Tavily) | 7 / 4 / 22, 78 791 characters              | 5 / 2 / 18, 55 395  |
+| Cut by the input budget (60 000)     | 11 snippets                                 | none                |
+| Candidates, over the limit of 40     | 49, 9 dropped                               | 38, none            |
+| Support proposed, dropped            | 41; 1 too short, 4 not found, 3 facts dropped on numbers | 46; 1 not found |
+| Facts verified, kept, cut by limit   | 32, 20, 12                                  | 37, 20, 17          |
+| confirmed / single / disputed        | 1 / 19 / 0                                  | 4 / 16 / 0          |
+| Contradiction groups withdrawn       | 7                                           | 10                  |
+| LLM calls (topic + button)           | 5 + 6                                        | 8 + 6               |
+| Largest extraction output            | 4 329 tokens of 8 000, no truncation        | 3 927, none         |
+
+- `confirmed` worked on live data: the date of the battle stands on wikipedia.org, life.ru,
+  prlib.ru and znanierussia.ru. It also confirmed "Мамай заключил союз с Ягайло" from kp.ru and
+  youtube.com, and a Soviet fact from wikipedia.org and a LiveJournal blog: the "trusted domains"
+  question below is real.
+- Every support item the quote check dropped was on a Tavily chunk (Soviet topic: 5 of 44
+  Tavily items over all 49 candidates of the reply; Kulikovo: 1 of 40); Wikipedia's were all
+  verified. The Soviet run also dropped 3 facts whose numbers were not in their quotes.
+- No dispute survived the verdict in either topic, so "СПОРНО" did not appear live; it is covered
+  by the tests only.
+- English Wikipedia contributed no support of its own in either topic.
+- Text quality: posts and threads were clean for the style filter after at most 2 regenerations,
+  but read as retold notes. The Soviet short post put 1935 before 1931 and joined them with "Но";
+  the Soviet thread is a list of ration norms of the Murmansk archive. The Kulikovo thread follows
+  the order of events and reads best.
 
 ### Wikipedia extracts
 
@@ -376,7 +449,7 @@ Decided as config values (HIS-6), defaults to be revisited after real drafts:
   cut, and an optional tail drop that is off by default (HIS-22, see "Short post length").
 - Numbering (`1/ `) is off by default (`THREAD_NUMBERING`). Code adds it after the reply, the
   model is given a tweet limit reduced by the widest prefix, and the full length is checked.
-- Open: how many facts a thread needs (see [pipeline.md](pipeline.md), failure behaviour).
+- A thread needs `THREAD_MIN_FACTS` (5) assertable facts, decided in HIS-8 (see "Bot delivery").
 
 ### Few-shot selection
 

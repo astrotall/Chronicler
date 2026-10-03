@@ -90,8 +90,13 @@ retry wording, optional tail drop) in `app/services/short_post.py`. HIS-23 added
 added the style filter: the deterministic checks in `app/services/style_filter.py`, the critic in
 `app/services/style_critic.py`, the regeneration loop in `app/services/style_review.py`, the models
 in `app/domain/style.py`, the critic and revision prompts in `app/prompts/style_critique.py`, and
-the matching data next to the rules in `app/config/style.py`. The delivery step is not built yet,
-and the bot does not run the pipeline yet. `db` does not exist yet.
+the matching data next to the rules in `app/config/style.py`. HIS-8 connected the pipeline to Telegram:
+the orchestration in `app/services/pipeline.py`, the state behind the `RunStore` Protocol in
+`app/services/run_store.py`, the outcome models in `app/domain/pipeline.py`, the button revisions
+and angles in `app/prompts/revisions.py`, and in `app/bot` the handlers, the background jobs
+(`jobs.py`, `flow.py`), the progress message, the input parsing (`requests.py`), the message
+formatting (`formatting.py`), the keyboard and all the Russian texts (`messages.py`). `db` does
+not exist yet.
 
 ## Detailed guides
 

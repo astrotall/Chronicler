@@ -32,7 +32,8 @@ bot  ->  services  ->  llm
    nothing from the layers above. `prompts` may import `domain`; `domain` imports only
    Pydantic and the standard library.
 4. **`db`, when it exists,** is reached from `services` through an interface defined in
-   `services`, never imported by `llm` or `research`.
+   `services`, never imported by `llm` or `research`. That interface is `RunStore`
+   (`app/services/run_store.py`).
 5. **`bot` holds no business logic.** A handler parses input, calls one service function and
    formats the result.
 6. **`app/main.py` is the composition root.** It may import any layer to wire the application
@@ -338,6 +339,39 @@ written with, and whether a closing question is allowed. It returns a `StyleResu
 - Texts of posts, facts, excerpts, explanations and replies are never logged; the INFO line holds
   counters and rule names.
 
+### Pipeline and delivery
+
+`Pipeline` (`app/services/pipeline.py`) runs steps 1-5 for a topic (`run_topic`) and steps 4-5 for
+a button (`rework`); the full behaviour is in [pipeline.md](pipeline.md), step 6. It takes
+`PipelineClients` (the four step clients), a `Researcher` (a Protocol that `ResearchService`
+satisfies: `source_names` and `research(queries)`), a `RunStore` and `PipelineLimits` (built by
+`PipelineLimits.from_settings`). It returns typed outcomes from `app/domain/pipeline.py`, never
+raises an `LLMError`: the error becomes `StepFailed(stage, kind)`, so `bot` never imports `llm`.
+The progress callback is a Protocol taking a `PipelineStage`.
+
+| Module                        | Holds                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| `app/services/pipeline.py`    | `Pipeline`, `PipelineClients`, `PipelineLimits`, the `Progress` and `Researcher` Protocols, the error mapping, the thread threshold, the buttons on offer |
+| `app/services/run_store.py`   | `RunStore` (Protocol, async) and `InMemoryRunStore`                       |
+| `app/prompts/revisions.py`    | `ANGLES` and the `Revision` instruction of each button                    |
+| `app/domain/pipeline.py`      | `PipelineStage`, `PostAction`, `FailureKind`, `StoredDraft`, `PostReady` and the other outcomes |
+| `app/bot/handlers.py`         | The router: `/start`, a hint for other commands and non-text messages, the topic, the buttons. Each handler parses input and starts one job |
+| `app/bot/requests.py`         | `parse_topic`: the format prefix, the empty and over-long topic          |
+| `app/bot/flow.py`             | `BotContext`, the jobs for a topic and a button: progress, timeout, delivery, `send` with one `RetryAfter` retry |
+| `app/bot/jobs.py`             | `JobRunner`: one background task per user, the busy check, waiting and cancelling |
+| `app/bot/progress.py`         | `ProgressMessage`: one message edited per stage, deleted or turned into the final status |
+| `app/bot/formatting.py`       | Rendering of outcomes into messages: the post, warnings and facts (HTML, escaped), splitting at 4096 |
+| `app/bot/keyboards.py`        | `DraftCallback` (aiogram `CallbackData`) and the keyboard                 |
+| `app/bot/messages.py`         | Every Russian text the bot sends, the format prefixes and the labels      |
+
+- `app/main.py` builds everything: the two `httpx` clients, `LLMClientFactory`, the sources,
+  `ResearchService`, `InMemoryRunStore`, `Pipeline`, and the dispatcher with `BotContext` in its
+  workflow data under `context`, so aiogram passes it to the handlers. Polling runs with
+  `handle_as_tasks=True`; on shutdown the running jobs are cancelled and the clients closed.
+- `bot` imports `services` (the pipeline, `split_sentences` and `PARAGRAPH_BREAK` for splitting),
+  `domain` and `prompts` (`disputed_ids`), never `llm` or `research`.
+- Formatting is in `bot` because it is Telegram's: the 4096 limit, HTML escaping, the keyboard.
+
 ## Configuration
 
 - All settings come from one Pydantic settings model, filled from environment variables and an
@@ -346,7 +380,10 @@ written with, and whether a closing question is allowed. It returns a `StyleResu
   per step, model names, source URLs, retry and attempt limits, length limits, the examples
   directory and the number of few-shot examples.
 - The style filter settings are `STYLE_CRITIC_ENABLED`, `STYLE_MAX_REGENERATIONS` and
-  `STYLE_CRITIC_MAX_FINDINGS`. The critic's schema limits (explanation and excerpt length) are
+  `STYLE_CRITIC_MAX_FINDINGS`. The bot settings are `POST_DEFAULT_FORMAT`, `THREAD_MIN_FACTS`,
+  `PIPELINE_TIMEOUT_SECONDS` and `STATE_MAX_RUNS`. The format is a plain literal in config and
+  becomes `PostFormat` in `PipelineLimits`, because `config` does not import `domain`. Telegram's
+  limits (4096 characters, the topic limit, drafts per run) are constants. The critic's schema limits (explanation and excerpt length) are
   constants in `app/config/constants.py`, because a Pydantic reply schema is static.
 - The banned-phrase list and the other style rule data are constants in `app/config/style.py`,
   not environment variables: a phrase such as "это не просто X, а Y" contains the comma that a
@@ -372,3 +409,6 @@ written with, and whether a closing question is allowed. It returns a `StyleResu
   are tested hardest, including their boundary cases.
 - Services use a scripted fake client that returns its replies in order and records the calls
   (`ScriptedLLMClient` in `tests/llm_helpers.py`).
+- The bot is tested through `Dispatcher.feed_update` with `Bot.__call__` replaced by a recorder
+  that returns real `Message` objects (`tests/test_bot_flow.py`), on a `Pipeline` built from
+  scripted clients and fake sources (`tests/pipeline_helpers.py`).

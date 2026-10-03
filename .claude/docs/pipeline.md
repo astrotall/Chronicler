@@ -396,21 +396,116 @@ calls for a short post (the length retries).
 
 ### 6. Delivery
 
-Input: the accepted `Draft` and its `FactSet`. Output: Telegram messages.
+Input: the accepted `StyleResult` and its `FactSet`. Output: Telegram messages. The orchestration
+of steps 1-5 is `Pipeline` in `app/services/pipeline.py`; the Telegram side is `app/bot`.
 
-- The post comes first. Under it, the facts that were used, each with its source link and status.
-- A fact with status `disputed` is marked with the word "СПОРНО" in the reply.
-- Buttons:
+#### The run
 
-| Button          | Intent                                                                         |
-| --------------- | ------------------------------------------------------------------------------ |
-| короче          | Rewrite the same draft shorter, from the same facts                            |
-| в тред          | Rewrite the same facts as a thread                                             |
-| другой заход    | A different angle on the topic; may select different facts from the same set   |
-| ещё вариант     | The same angle, a different wording                                            |
+`Pipeline.run_topic(topic, post_format, progress)`:
 
-Every button re-enters the pipeline at step 4. None of them re-runs research, so a click is
-cheap and the facts the author already checked stay the same.
+1. No research source enabled: `NoSources`, before any call.
+2. Steps 1-3. No snippets: `ResearchFailed` if every source failed at least once, otherwise
+   `NothingFound`. `InsufficientFacts` becomes `NotEnoughFacts` with the counts of assertable and
+   disputed facts and the facts themselves.
+3. The format is the one the author asked for (a prefix `тред:`, `лонг:`, `коротко:` in the
+   message) or `POST_DEFAULT_FORMAT` (`short`). A thread with fewer than `THREAD_MIN_FACTS` (5)
+   assertable facts (not disputed) becomes a short post and the outcome carries a
+   `ThreadDowngrade`, which the bot shows as a warning.
+4. The `FactSet` is stored, then steps 4 and 5 run with the examples loaded from `EXAMPLES_DIR` on
+   this request (an edit in `data/examples` works without a restart), no angle and
+   `allow_closing_question=False`. The chosen draft is stored and `PostReady` is returned with the
+   draft id, the `StyleResult`, the research failures, the `ExtractionStats` and the buttons that
+   make sense for it.
+
+`progress(stage)` is awaited before each stage (planning, research, facts, writing, style). An
+`LLMError` on any step becomes `StepFailed(stage, kind)`; the kind is the error class (config, auth,
+request, rate limit, unavailable, invalid response). The critic and regeneration failures of step
+5 are already handled inside it and never reach this point. Any other exception propagates.
+
+#### Messages
+
+In this order:
+
+1. **The post**, as plain text with no `parse_mode`, so it copies without markup: one message for
+   `short` and `long`, one message per tweet for a thread (`Draft.rendered`, numbering included).
+   A message over Telegram's 4096 characters (only a `long` post can reach it) is split at
+   paragraphs; a paragraph over the limit at sentences (`split_sentences`), a sentence over it at a
+   space, a word over it hard. Nothing is added to the pieces, so they copy as the post. The
+   buttons are under the last message of the post.
+2. **Warnings**, plain text, only if there are any: a thread turned into a short post, numbers not
+   among the facts (`unverified_numbers`), length violations with the numbers, the remaining style
+   violations (rule, excerpt, tweet, explanation; `length` and `unverified_number` are shown by the
+   first two lines and not repeated), the critic did not check the text (`critic = failed`), a
+   regeneration failed and the best version is shown, and a non-empty `dropped_tail` with the
+   dropped text and a note that `used_fact_ids` may be inexact.
+3. **Facts**, HTML with every text escaped. Each fact: id, status ("подтверждён: разные домены",
+   "один источник" or "СПОРНО"), text, and a link per source url labelled with its host. A
+   disputed fact has "Почему спорно (вместе с F6): explanation" from its `Dispute`, or "источники
+   расходятся" if it is in no group. After the first post the facts are split into "В посте" (by
+   `used_fact_ids`, which since HIS-23 includes the disputed facts the text states) and "Не вошли
+   в пост", every fact of the `FactSet` is shown, and partial source failures are noted at the
+   bottom as source and error class only. After a button only the facts of the new variant are
+   shown, with "Остальные факты (N) в первом ответе". Messages are cut between facts, never inside
+   one; link previews are off.
+
+The progress is one message, edited when the stage changes (at most 5 edits a run, under Telegram's
+edit rate). It is deleted after a post is delivered; on any other outcome it is edited into the
+message for the author. A failed edit or delete is logged and ignored. A `RetryAfter` while
+sending is waited out once.
+
+#### Buttons
+
+| Button          | What runs                                                                       |
+| --------------- | ------------------------------------------------------------------------------- |
+| короче          | Same format and angle, a `Revision` asking for a shorter version that keeps the main facts |
+| в тред          | `PostFormat.THREAD`, a `Revision` with the previous text. Not shown under a thread or when there are fewer than `THREAD_MIN_FACTS` assertable facts |
+| другой заход    | The next angle of `ANGLES` (`app/prompts/revisions.py`), in turn, and a `Revision` asking for another first sentence and order |
+| ещё вариант     | Same format and angle, a `Revision` asking for other wording                     |
+
+`Pipeline.rework(draft_id, action, progress)` reads the stored draft and its `FactSet`, re-enters at
+step 4 and runs step 5 on the result exactly as for the first post. Research is never re-run, so a
+click is cheap and the facts the author checked stay the same. A missing draft (restart, eviction)
+is `DraftExpired`; "в тред" on too few facts is `ThreadUnavailable`, with no model call.
+
+Each angle says it sets only the presentation and the order of the facts, that every claim still
+comes from the facts, and that if the facts do not fit it (no person named, for example) the model
+takes the closest presentation they allow and invents nothing. The angles: through a person, through
+a detail or a number, through a place, and through a comparison of two facts from the list without
+any conclusion about a causal link between them. A short post always gets the same 3 facts
+(`select_short_facts`), so "другой заход" of a short post changes the presentation, not the facts.
+
+`callback_data` is `d:<action>:<draft id>`, the id being 12 random hex characters, at most 25
+bytes. The id is random rather than a counter so a button from before a restart never lands on a
+draft of a new run.
+
+#### State
+
+`RunStore` (`app/services/run_store.py`) is a Protocol with async methods: `add_run(fact_set)`,
+`add_draft(run_id, draft, angle_index)` (none if the run is gone) and `get_draft(draft_id)`. Today
+it is `InMemoryRunStore`: the last `STATE_MAX_RUNS` (20) runs, least recently used evicted first,
+each with at most 30 drafts. HIS-9 replaces it with SQLite behind the same Protocol. After a restart
+a button answers "кнопки устарели" instead of failing.
+
+#### Concurrency, timeout and input
+
+- aiogram polling runs every update as a task (`handle_as_tasks=True`, set explicitly), and a
+  handler only starts a background job and returns, so other updates are handled while a run goes.
+- One job at a time per user (`JobRunner`, `app/bot/jobs.py`). A topic or a button during a job is
+  answered at once with "ещё работаю" and dropped, not queued. A button is answered (`answer()`)
+  before any work.
+- A job is cancelled after `PIPELINE_TIMEOUT_SECONDS` (600) and the author is told; the user is
+  free again either way, including after an unexpected error.
+- A message starting with `/` other than `/start`, and any message without text (photo, sticker,
+  voice, document), gets a short hint and starts nothing. A topic over `TOPIC_MAX_CHARS` (500), or
+  a prefix with nothing after it, is an input error with its own reply: the topic goes into prompts
+  and into the planned search queries.
+
+#### Logs
+
+The topic is the author's data: INFO logs only its length and the requested format. One INFO line
+per run or button holds the outcome class. An unexpected error is logged with its class and the
+stack, never its message, because a `ValidationError` message carries input values. Texts of
+topics, posts, facts and quotes never reach the log.
 
 ## Data models
 
@@ -438,6 +533,12 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `Violation`         | `rule`, `source` (`code` or `critic`), `part` (1-based or none), `excerpt` (from the text, none for length), `explanation` in Russian for the author |
 | `StyleReport`       | `violations`, `critic` (`checked`, `disabled`, `failed`), counters of critic findings dropped (excerpt not in the text), withdrawn and over the limit; `passed` is no violations |
 | `StyleResult`       | The `draft` that goes out, its `report`, `attempts` (versions evaluated), `chosen_attempt`, `regenerations` and `regeneration_failed` |
+| `PipelineStage`     | `planning`, `research`, `facts`, `writing`, `style`: what the progress message shows and what a failure names |
+| `PostAction`        | The buttons: `shorter`, `thread`, `angle`, `variant`                                                      |
+| `FailureKind`       | The class of an `LLMError` for the author: `config`, `auth`, `request`, `rate_limit`, `unavailable`, `invalid_response`, `other` |
+| `StoredDraft`       | What a button needs: `draft_id`, `run_id`, the `FactSet`, the `Draft` and the `angle_index` it was written with |
+| `PostReady`         | `draft_id`, the `StyleResult`, the `FactSet`, the buttons to show, `variant`, research `failures`, an optional `ThreadDowngrade`, the `ExtractionStats` of the first post |
+| Other outcomes      | `NoSources`, `ResearchFailed`, `NothingFound`, `NotEnoughFacts` (the `InsufficientFacts`, the disputed count, failures), `StepFailed` (stage, kind), and for a button `DraftExpired` and `ThreadUnavailable`. `TopicOutcome` and `ReworkOutcome` are their unions |
 
 ### Fact status
 
@@ -476,13 +577,21 @@ post still goes out with it listed, and the author decides.
 
 ## Failure behaviour
 
-- A source is down: skip it, continue, tell the author which sources answered.
+- A source is down: skip it, continue, note the failed source and error class under the facts.
+  Every source down: the author is told, nothing is written. No source enabled: the author is told
+  before any model call.
 - Fewer than `FACTS_MIN_FACTS` facts that can be stated survive step 3: the step returns
   `InsufficientFacts`, the pipeline stops and says so. Do not write a post from the topic alone.
-- Fewer facts than a thread needs: say so and offer a short post.
+- Fewer facts than a thread needs (`THREAD_MIN_FACTS` assertable facts): a short post is written
+  instead and the warning says so; the "в тред" button is not shown, and an old one answers
+  without a model call.
 - The critic fails: the post goes out with the deterministic findings and `critic = failed`, and
   the author is told the critic did not check it. A failed regeneration keeps the best version
   already written. See step 5.
-- The provider for a step is unavailable: the error names the step and the provider. There is no
+- An LLM error on a step: the author is told which step failed and why in one phrase (no request
+  details); the log has the step and the error class.
+- A run over `PIPELINE_TIMEOUT_SECONDS`: cancelled, the author is told.
+- The provider for a step is unavailable: the log names the step and the provider, the author sees
+  the step. There is no
   silent fallback to the other provider, because that would change the cost and the voice
   without the author knowing.
