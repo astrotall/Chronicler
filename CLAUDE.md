@@ -84,7 +84,8 @@ in `app/prompts/json_reply.py`. HIS-4 added the research sources in `app/researc
 in `app/domain/fact.py`. HIS-6 added the writing step in `app/services/generator.py`, the few-shot
 loader in `app/services/style.py`, the `Draft` models in `app/domain/draft.py`, the style rule data
 in `app/config/style.py` and the prompts in `app/prompts/writing.py` and
-`app/prompts/style_rules.py`. The style filter and delivery steps are not built yet, and the bot
+`app/prompts/style_rules.py`. HIS-22 added the short post rules (fact selection, sentence budget,
+retry wording, optional tail drop) in `app/services/short_post.py`. The style filter and delivery steps are not built yet, and the bot
 does not run the pipeline yet. `db` does not exist yet.
 
 ## Detailed guides

@@ -40,6 +40,13 @@ class LengthViolation(BaseModel):
     limit: int = Field(ge=0)
 
 
+class SentenceBudget(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    max_sentences: int = Field(ge=1)
+    sentence_chars: int = Field(ge=1)
+
+
 class Revision(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -56,6 +63,7 @@ class Draft(BaseModel):
     unverified_numbers: list[str]
     length_violations: list[LengthViolation]
     attempts: int = Field(ge=1)
+    dropped_tail: list[DraftText] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def require_one_part_for_a_single_post(self) -> Self:

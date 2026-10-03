@@ -284,8 +284,9 @@ full behaviour is in [pipeline.md](pipeline.md), step 4.
 | Module                           | Holds                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------ |
 | `app/services/generator.py`      | The reply schemas (`SingleReply`, `ThreadReply`), `WritingLimits`, numbering, the length check and its one retry, fact id matching, the number check |
+| `app/services/short_post.py`     | Pure functions for a short post: fact selection, the sentence budget, sentence and paragraph boundaries, the sentences to cut, the tail drop and its disputed-number guard |
 | `app/services/style.py`          | `load_examples(directory, limit)`: the few-shot loader                   |
-| `app/prompts/writing.py`         | `render_writing` and `render_length_correction`                          |
+| `app/prompts/writing.py`         | `render_writing`, `render_length_correction` and `render_short_correction` |
 | `app/prompts/style_rules.py`     | `render_style_rules`: the Russian rules block, shared with the critic prompt of step 5 |
 | `app/config/style.py`            | Style rule data: banned phrases, forbidden dashes, invented-experience phrases, cautious wordings |
 | `app/domain/draft.py`            | `PostFormat`, `DraftPart`, `LengthIssue`, `LengthViolation`, `Revision`, `Draft` |

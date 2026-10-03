@@ -21,8 +21,10 @@ verifies the links in between.
    `disputed`. Too few facts is a result shown to the author, not a guess.
 4. **Write.** The model writes a short post, a long post or a thread strictly from the facts; the
    topic only frames the post, and the post adds no conclusion or claim of importance the facts
-   do not state. Disputed facts are shown to the model apart and written cautiously. Code checks the length (one retry, then the draft is marked, never cut) and warns
-   about every number in the post that is not among the facts.
+   do not state. Disputed facts are shown to the model apart and written cautiously. Code checks
+   the length (a retry, then the draft is marked; a short post is written from 3 facts picked by
+   code and is cut only if `SHORT_DROP_TAIL` is on) and warns about every number in the post
+   that is not among the facts.
 5. **Filter style.** Deterministic style checks, then an LLM critic pass. On a violation the post
    is regenerated with a note on what to fix, up to 2 attempts.
 6. **Deliver.** Telegram receives the post, the facts with their sources underneath, and the
@@ -185,6 +187,10 @@ uv run pytest tests/test_facts_live.py -m integration -o log_cli=true --log-cli-
 | Variable                  | Meaning                                                                  |
 | ------------------------- | ------------------------------------------------------------------------ |
 | `SHORT_MAX_CHARS`         | Longest short post, 280 by default                                       |
+| `SHORT_MAX_FACTS`         | Most facts a short post is written from, picked by code, 3 by default    |
+| `SHORT_SENTENCE_CHARS`    | Sentence length in the short post budget, 80 by default: 280 // 80 = 3 sentences |
+| `SHORT_LENGTH_RETRIES`    | Retries of an overlong short post, 2 by default (long and thread get 1)  |
+| `SHORT_DROP_TAIL`         | `true` drops trailing paragraphs or sentences of a short post still over the limit after the retries; default `false` |
 | `LONG_MAX_CHARS`          | Longest long post, 25000 by default (X Premium)                          |
 | `THREAD_TWEET_MAX_CHARS`  | Longest tweet of a thread, numbering included, 280 by default            |
 | `THREAD_MAX_TWEETS`       | Most tweets in a thread, 12 by default, at least 2                       |
@@ -197,9 +203,10 @@ folder may be empty: the post is then written without examples. Lengths are coun
 `len()`; X counts a link as 23 characters and an emoji as 2, so a post with links can be shorter
 on X than the count says.
 
-The live test writes a short post and a thread from a small hand-made fact set with DeepSeek,
-checks only their structure, and saves the drafts to `data/comparisons/generator_live.json` (not
-committed); it needs `DEEPSEEK_API_KEY`:
+The live test writes 3 short posts and 2 threads per topic from two small hand-made fact sets
+with DeepSeek (2 and 2 with the author examples, skipped when `data/examples` is empty), checks
+their structure and that every part fits its limit with no tail dropped, and saves the drafts to
+`data/comparisons/generator_live_<topic>.json` (not committed); it needs `DEEPSEEK_API_KEY`:
 
 ```bash
 uv run pytest tests/test_generator_live.py -m integration -o log_cli=true --log-cli-level=INFO

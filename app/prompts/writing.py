@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from app.config.constants import THREAD_MIN_TWEETS
-from app.domain.draft import LengthIssue, LengthViolation, PostFormat, Revision
+from app.domain.draft import LengthIssue, LengthViolation, PostFormat, Revision, SentenceBudget
 from app.domain.fact import Fact, FactSet, FactStatus
 from app.domain.llm import Message, Role
 from app.prompts.style_rules import render_style_rules
@@ -30,8 +30,10 @@ WRITING_SYSTEM_PROMPT = (
     "{style_rules}"
 )
 SHORT_FORMAT_RULE = (
-    "Format: one short post in the field text, at most {max_chars} characters including "
-    "spaces. Aim well below the limit."
+    "Format: one short post in the field text: at most {max_sentences} sentences, each "
+    "sentence at most {sentence_chars} characters, and at most {max_chars} characters in "
+    "total including spaces. A sentence carries one fact, at most two. If the facts do not "
+    "fit, leave some of them out."
 )
 LONG_FORMAT_RULE = (
     "Format: one long post in the field text, at most {max_chars} characters including "
@@ -74,12 +76,25 @@ LENGTH_CORRECTION_TEMPLATE = (
 )
 PART_TOO_LONG_LINE = "- part {part}: {actual} characters, the limit is {limit}"
 TOO_MANY_PARTS_LINE = "- {actual} tweets, the maximum is {limit}"
+SHORT_CORRECTION_TEMPLATE = (
+    "The post has {actual} characters, {excess} over the limit of {limit}. Delete these "
+    "sentences, or shorten them by at least {excess} characters in total:\n{sentences}\n"
+    "Keep at most {max_sentences} sentences. Keep whole sentences, never cut a sentence in "
+    "the middle, and do not add or change facts. Reply with the same json shape."
+)
+NAMED_SENTENCE_LINE = "- «{sentence}»"
 
 
-def format_rule(post_format: PostFormat, max_chars: int, max_tweets: int) -> str:
+def format_rule(
+    post_format: PostFormat, max_chars: int, max_tweets: int, budget: SentenceBudget
+) -> str:
     match post_format:
         case PostFormat.SHORT:
-            return SHORT_FORMAT_RULE.format(max_chars=max_chars)
+            return SHORT_FORMAT_RULE.format(
+                max_sentences=budget.max_sentences,
+                sentence_chars=budget.sentence_chars,
+                max_chars=max_chars,
+            )
         case PostFormat.LONG:
             return LONG_FORMAT_RULE.format(max_chars=max_chars)
         case PostFormat.THREAD:
@@ -144,6 +159,7 @@ def render_writing(
     *,
     max_chars: int,
     max_tweets: int,
+    budget: SentenceBudget,
     examples: Sequence[str] = (),
     angle: str | None = None,
     revision: Revision | None = None,
@@ -165,7 +181,7 @@ def render_writing(
         Message(
             role=Role.SYSTEM,
             content=WRITING_SYSTEM_PROMPT.format(
-                format_rule=format_rule(post_format, max_chars, max_tweets),
+                format_rule=format_rule(post_format, max_chars, max_tweets, budget),
                 style_rules=render_style_rules(),
             ),
         )
@@ -194,3 +210,20 @@ def violation_line(violation: LengthViolation) -> str:
 def render_length_correction(violations: Sequence[LengthViolation]) -> Message:
     problems = LINE_SEPARATOR.join(violation_line(violation) for violation in violations)
     return Message(role=Role.USER, content=LENGTH_CORRECTION_TEMPLATE.format(problems=problems))
+
+
+def render_short_correction(
+    actual: int, limit: int, sentences: Sequence[str], budget: SentenceBudget
+) -> Message:
+    return Message(
+        role=Role.USER,
+        content=SHORT_CORRECTION_TEMPLATE.format(
+            actual=actual,
+            excess=actual - limit,
+            limit=limit,
+            sentences=LINE_SEPARATOR.join(
+                NAMED_SENTENCE_LINE.format(sentence=sentence) for sentence in sentences
+            ),
+            max_sentences=budget.max_sentences,
+        ),
+    )

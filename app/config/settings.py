@@ -28,7 +28,10 @@ from app.config.constants import (
     RESEARCH_DEFAULT_READ_TIMEOUT_SECONDS,
     RESEARCH_DEFAULT_SNIPPET_MAX_CHARS,
     RESEARCH_DOMAINS_SEPARATOR,
+    SHORT_DEFAULT_LENGTH_RETRIES,
     SHORT_DEFAULT_MAX_CHARS,
+    SHORT_DEFAULT_MAX_FACTS,
+    SHORT_DEFAULT_SENTENCE_CHARS,
     TAVILY_DEFAULT_CHUNKS_PER_SOURCE,
     TAVILY_DEFAULT_MAX_RESULTS,
     TAVILY_MAX_CHUNKS_PER_SOURCE,
@@ -125,6 +128,10 @@ class Settings(BaseSettings):
     )
 
     short_max_chars: int = Field(default=SHORT_DEFAULT_MAX_CHARS, ge=1)
+    short_max_facts: int = Field(default=SHORT_DEFAULT_MAX_FACTS, ge=1)
+    short_sentence_chars: int = Field(default=SHORT_DEFAULT_SENTENCE_CHARS, ge=1)
+    short_length_retries: int = Field(default=SHORT_DEFAULT_LENGTH_RETRIES, ge=0)
+    short_drop_tail: bool = False
     long_max_chars: int = Field(default=LONG_DEFAULT_MAX_CHARS, ge=1)
     thread_tweet_max_chars: int = Field(default=THREAD_TWEET_DEFAULT_MAX_CHARS, ge=1)
     thread_max_tweets: int = Field(default=THREAD_DEFAULT_MAX_TWEETS, ge=THREAD_MIN_TWEETS)
