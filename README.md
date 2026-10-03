@@ -25,8 +25,12 @@ verifies the links in between.
    the length (a retry, then the draft is marked; a short post is written from 3 facts picked by
    code and is cut only if `SHORT_DROP_TAIL` is on) and warns about every number in the post
    that is not among the facts.
-5. **Filter style.** Deterministic style checks, then an LLM critic pass. On a violation the post
-   is regenerated with a note on what to fix, up to 2 attempts.
+5. **Filter style.** Deterministic checks (dashes, banned phrases, invented experience, emoji,
+   hashtags, a closing question, length, numbers not among the facts), then an LLM critic that
+   reads the post against the facts (claims the facts do not state, ambiguous pronouns, filler
+   lines, cliches, rhetorical triplets, extra opinions). On a violation the post is regenerated
+   with the exact list of what to fix, up to 2 times; the best version goes out with whatever
+   violations are left. A critic failure never loses the post, it is flagged.
 6. **Deliver.** Telegram receives the post, the facts with their sources underneath, and the
    buttons "короче", "в тред", "другой заход", "ещё вариант".
 
@@ -55,8 +59,8 @@ data/
 At the moment `app/` holds settings, an owner-only bot with `/start` and a stub for plain text,
 the LLM client (`app/llm`, DeepSeek and Anthropic), the research sources (`app/research`,
 Wikipedia and Tavily), query planning, the research orchestrator and fact extraction
-(`app/services`), and the writing step with the few-shot loader. The style step is not built yet,
-and the bot does not run the pipeline yet.
+(`app/services`), the writing step with the few-shot loader, and the style filter with the critic
+and the regeneration loop. The bot does not run the pipeline yet.
 
 ## Running
 
@@ -210,6 +214,27 @@ their structure and that every part fits its limit with no tail dropped, and sav
 
 ```bash
 uv run pytest tests/test_generator_live.py -m integration -o log_cli=true --log-cli-level=INFO
+```
+
+### Style filter
+
+| Variable                    | Meaning                                                                |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `STYLE_CRITIC_ENABLED`      | `false` turns the LLM critic off; the deterministic checks always run, default `true` |
+| `STYLE_MAX_REGENERATIONS`   | Most regenerations after a violation, 2 by default; `0` only reports    |
+| `STYLE_CRITIC_MAX_FINDINGS` | Most critic findings used per check, 10 by default; extra ones are dropped and counted |
+
+The critic runs on the `style_critique` step (`LLM_STYLE_CRITIQUE_PROVIDER`). The banned phrases,
+the invented-experience phrases and the rules that weigh more when the best version is chosen
+are data in `app/config/style.py`, not environment variables.
+
+The live test runs the critic on the local HIS-21 drafts in `data/comparisons/` (skipped when
+they are missing) and reports which known defects it finds and what it flags on relatively clean
+drafts, then runs the whole filter on fresh and on known bad Kulikovo drafts. Results go to
+`data/comparisons/his7_*.json`; it needs `DEEPSEEK_API_KEY`:
+
+```bash
+uv run pytest tests/test_style_live.py -m integration -o log_cli=true --log-cli-level=INFO
 ```
 
 ## Before committing

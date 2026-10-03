@@ -85,8 +85,13 @@ in `app/domain/fact.py`. HIS-6 added the writing step in `app/services/generator
 loader in `app/services/style.py`, the `Draft` models in `app/domain/draft.py`, the style rule data
 in `app/config/style.py` and the prompts in `app/prompts/writing.py` and
 `app/prompts/style_rules.py`. HIS-22 added the short post rules (fact selection, sentence budget,
-retry wording, optional tail drop) in `app/services/short_post.py`. The style filter and delivery steps are not built yet, and the bot
-does not run the pipeline yet. `db` does not exist yet.
+retry wording, optional tail drop) in `app/services/short_post.py`. HIS-23 added
+`app/services/disputes.py`, which adds the disputed facts a draft states to `used_fact_ids`. HIS-7
+added the style filter: the deterministic checks in `app/services/style_filter.py`, the critic in
+`app/services/style_critic.py`, the regeneration loop in `app/services/style_review.py`, the models
+in `app/domain/style.py`, the critic and revision prompts in `app/prompts/style_critique.py`, and
+the matching data next to the rules in `app/config/style.py`. The delivery step is not built yet,
+and the bot does not run the pipeline yet. `db` does not exist yet.
 
 ## Detailed guides
 

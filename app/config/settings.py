@@ -32,6 +32,9 @@ from app.config.constants import (
     SHORT_DEFAULT_MAX_CHARS,
     SHORT_DEFAULT_MAX_FACTS,
     SHORT_DEFAULT_SENTENCE_CHARS,
+    STYLE_DEFAULT_CRITIC_ENABLED,
+    STYLE_DEFAULT_CRITIC_MAX_FINDINGS,
+    STYLE_DEFAULT_MAX_REGENERATIONS,
     TAVILY_DEFAULT_CHUNKS_PER_SOURCE,
     TAVILY_DEFAULT_MAX_RESULTS,
     TAVILY_MAX_CHUNKS_PER_SOURCE,
@@ -139,6 +142,10 @@ class Settings(BaseSettings):
 
     examples_dir: Path = Path(EXAMPLES_DEFAULT_DIR)
     examples_max: int = Field(default=EXAMPLES_DEFAULT_MAX, ge=0)
+
+    style_critic_enabled: bool = STYLE_DEFAULT_CRITIC_ENABLED
+    style_max_regenerations: int = Field(default=STYLE_DEFAULT_MAX_REGENERATIONS, ge=0)
+    style_critic_max_findings: int = Field(default=STYLE_DEFAULT_CRITIC_MAX_FINDINGS, ge=1)
 
     @field_validator("owner_telegram_ids", mode="before")
     @classmethod

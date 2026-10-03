@@ -2,6 +2,7 @@ from typing import NamedTuple
 
 BANNED_PHRASES: tuple[str, ...] = (
     "это не просто X, а Y",
+    "не просто X, а Y",
     "давайте разберёмся",
     "давайте погрузимся",
     "стоит отметить",
@@ -21,6 +22,101 @@ CAUTIOUS_WORDINGS: tuple[str, ...] = (
     "источники расходятся",
 )
 OPINION_MAX_PER_POST = 1
+
+PHRASE_PLACEHOLDERS: frozenset[str] = frozenset({"X", "Y"})
+PHRASE_PLACEHOLDER_MAX_WORDS = 8
+PHRASE_MIN_STEM_CHARS = 3
+PHRASE_STEM_ENDINGS: tuple[str, ...] = (
+    "аться",
+    "иться",
+    "ться",
+    "емся",
+    "имся",
+    "ется",
+    "ится",
+    "ются",
+    "ами",
+    "ями",
+    "ого",
+    "его",
+    "ому",
+    "ему",
+    "ыми",
+    "ими",
+    "ешь",
+    "ете",
+    "ите",
+    "ала",
+    "ало",
+    "али",
+    "ила",
+    "ило",
+    "или",
+    "ась",
+    "ось",
+    "ись",
+    "тся",
+    "ах",
+    "ях",
+    "ой",
+    "ей",
+    "ий",
+    "ый",
+    "ая",
+    "яя",
+    "ое",
+    "ее",
+    "ые",
+    "ие",
+    "ую",
+    "юю",
+    "ом",
+    "ем",
+    "ам",
+    "ям",
+    "ов",
+    "ев",
+    "ет",
+    "ит",
+    "ут",
+    "ют",
+    "ат",
+    "ят",
+    "им",
+    "ть",
+    "те",
+    "сь",
+    "ся",
+    "а",
+    "я",
+    "о",
+    "е",
+    "у",
+    "ю",
+    "ы",
+    "и",
+    "ь",
+    "й",
+)
+BANNED_PHRASE_EXACT_WORDS: frozenset[str] = frozenset({"заключение"})
+SENTENCE_END_CHARACTERS = ".!?…"
+EMOJI_RANGES: tuple[tuple[str, str], ...] = (
+    ("\U0001f000", "\U0001faff"),
+    ("\u2600", "\u27bf"),
+    ("\u2b50", "\u2b55"),
+    ("\u231a", "\u231b"),
+    ("\u23e9", "\u23fa"),
+    ("\u3030", "\u3030"),
+    ("\u303d", "\u303d"),
+    ("\u3297", "\u3297"),
+    ("\u3299", "\u3299"),
+    ("\ufe0f", "\ufe0f"),
+)
+HASHTAG_MARK = "#"
+CLOSING_QUESTION_MARK = "?"
+DANGEROUS_STYLE_RULES: frozenset[str] = frozenset(
+    {"unsupported_claim", "unverified_number", "ambiguous_reference", "invented_experience"}
+)
 
 
 class RuleExample(NamedTuple):
