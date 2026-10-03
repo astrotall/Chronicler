@@ -62,6 +62,7 @@ Do not revisit these without an explicit instruction from the user.
 ├── .claude/
 │   └── docs/                  Pipeline, style, architecture and decision guides
 ├── app/
+│   ├── main.py                Entry point, starts aiogram polling
 │   ├── bot/                   aiogram handlers, keyboards, message formatting
 │   ├── services/              Pipeline steps: planning, facts, generator, style
 │   ├── llm/                   LLM interface and provider clients
@@ -75,8 +76,9 @@ Do not revisit these without an explicit instruction from the user.
     └── examples/              Reference posts for few-shot, may be empty
 ```
 
-Only the documents and `.gitignore` exist at the moment. The `app/` tree is the target layout
-and arrives with the tickets that follow HIS-1.
+The skeleton from HIS-2 exists: `app/main.py`, `app/config/`, `app/bot/` and `tests/`. `llm`,
+`research`, `services`, `prompts` and `domain` are empty packages that later tickets fill. `db`
+does not exist yet.
 
 ## Detailed guides
 
@@ -121,8 +123,9 @@ Before implementing, estimate the size:
   wait for approval.
 
 After implementing, verify: types pass, no duplicated logic, no unrelated files were modified.
-The commands for this (`make check`, `make test`) arrive in HIS-2; until then state plainly
-that they were not run.
+Run `make check` (ruff format check, ruff lint, mypy strict) and `make test` (pytest), and report
+the real result. CI runs the same two commands on every pull request. If a command was not run,
+state plainly that it was not.
 
 When the change adds or alters real behaviour (a verifier, a parser, a filter, a prompt that
 feeds a verifier, anything with branches), derive the boundary and failure cases and cover

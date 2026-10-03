@@ -157,15 +157,15 @@ Some files drift apart silently. Change them together:
 
 ## Pull requests
 
-Run the checks locally before pushing. These are the target commands; they appear in HIS-2 and
-do not exist yet:
+Run the checks locally before pushing:
 
 ```bash
 make check    # ruff format check, ruff lint, mypy strict
 make test     # pytest
+make format   # ruff format and ruff check --fix, to repair what make check reports
 ```
 
-Until HIS-2 lands, say in the PR that the checks were not run and why.
+If a check was not run, say so in the PR and give the reason.
 
 The PR title is the commit subject plus the Jira key at the end:
 `feat(facts): drop a fact whose quote is missing from the snippet (HIS-14)`.
@@ -194,9 +194,10 @@ One PR, one ticket. Refactoring nearby code "while you are here" goes in a separ
 
 ## Checks and CI
 
-`make check` and `make test` are the target gate, and a CI pipeline running the same commands is
-planned. Both arrive with HIS-2 and this section is updated then. Once CI exists, a red CI is
-never merged.
+`make check` and `make test` are the gate. The CI workflow `.github/workflows/ci.yml` runs them
+on every pull request as two jobs, `check` and `test`, with Python 3.12 through `uv sync --locked`.
+A red CI is never merged. A change to dependencies in `pyproject.toml` ships together with the
+updated `uv.lock`.
 
 Who runs git: the author. Claude working in this repository does not commit, push, create
 branches or open pull requests (see [CLAUDE.md](CLAUDE.md) -> "Hard rules").

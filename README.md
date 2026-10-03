@@ -37,6 +37,7 @@ app/
   domain/           Pydantic models
   config/           settings and constants
   db/               appears later, SQLite
+  main.py           entry point, starts aiogram polling
 tests/
 data/
   examples/         reference posts for few-shot (may be empty)
@@ -44,21 +45,40 @@ data/
   docs/             pipeline, style rules, architecture, decisions
 ```
 
-At the moment the repository holds documentation and `.gitignore` only. The `app/` tree is the
-target layout.
+At the moment `app/` holds the skeleton only: settings, an owner-only bot with `/start` and a
+stub for plain text. `llm`, `research`, `services`, `prompts` and `domain` are empty packages
+that later tickets fill.
 
 ## Running
 
-Appears in HIS-2. There is nothing to run yet.
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync                       # install dependencies from uv.lock
+cp .env.example .env          # then fill in the values
+make run                      # start the bot (aiogram polling)
+```
+
+`.env` holds the secrets and is never committed:
+
+| Variable             | Meaning                                                            |
+| -------------------- | ------------------------------------------------------------------ |
+| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather                                           |
+| `OWNER_TELEGRAM_IDS` | Telegram IDs allowed to use the bot, comma-separated: `123,456`    |
+| `LOG_LEVEL`          | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`, default `INFO`  |
+
+A missing or invalid variable stops the start with a message naming it. Updates from any other
+Telegram ID are ignored without a reply and logged as one line without the message text.
 
 ## Before committing
-
-The target gate, which arrives in HIS-2 (these commands do not exist yet):
 
 ```bash
 make check    # ruff format check, ruff lint, mypy strict
 make test     # pytest
+make format   # ruff format and ruff check --fix, to repair what make check reports
 ```
+
+The same two commands run in CI on every pull request (`.github/workflows/ci.yml`).
 
 Never commit to `main` directly, and never push without asking. Branches, commits and pull
 requests, including the Jira `HIS-` key convention, are in [CONTRIBUTING.md](CONTRIBUTING.md).
