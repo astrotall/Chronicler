@@ -29,6 +29,7 @@ from app.domain.fact import FactSet
 from app.domain.llm import Message, Role
 from app.llm.client import LLMClient
 from app.prompts.writing import render_length_correction, render_short_correction, render_writing
+from app.services.disputes import with_disputed_facts
 from app.services.facts import normalize_label
 from app.services.quote_check import extract_numbers
 from app.services.short_post import (
@@ -306,7 +307,8 @@ async def write_draft(
             kept, dropped = trimmed
             parts = [DraftPart(text=kept)]
             violations = check_length(parts, post_format, limits)
-    used, unknown = collect_fact_ids(reply.fact_ids, fact_set)
+    reported, unknown = collect_fact_ids(reply.fact_ids, fact_set)
+    used = with_disputed_facts(reported, [part.text for part in parts], prompt_facts)
     draft = Draft(
         post_format=post_format,
         parts=parts,

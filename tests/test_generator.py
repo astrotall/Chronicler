@@ -851,3 +851,199 @@ def test_a_draft_without_a_dropped_tail_defaults_to_an_empty_list() -> None:
 
     assert draft.dropped_tail == []
     assert Draft.model_validate(draft.model_dump(exclude={"dropped_tail"})) == draft
+
+
+BOTH_ARMIES_TEXT = "Русское войско оценивают то в 60 000, то в 150 000 человек. Источники спорят."
+ONLY_60_TEXT = "Русское войско оценивают в 60 000 человек."
+NO_DISPUTED_NUMBERS_TEXT = "Битва произошла 8 сентября 1380 года."
+DISPUTE_OFFERED_LIMITS = make_limits(short_max_facts=5)
+NUMBERLESS_TEXT = "Размер русского войска до сих пор обсуждают."
+
+
+def numbered_dispute_fact_set(*, numberless: bool, grouped: bool) -> FactSet:
+    first_text = NUMBERLESS_TEXT if numberless else ARMY_60_TEXT
+    return FactSet(
+        topic=TOPIC,
+        facts=[
+            make_fact("F1", DATE_TEXT, DATE_QUOTE, FactStatus.CONFIRMED),
+            make_fact("F2", WINNER_TEXT, WINNER_QUOTE, FactStatus.SINGLE),
+            make_fact("F3", PLACE_TEXT, PLACE_QUOTE, FactStatus.SINGLE),
+            make_fact("F4", first_text, ARMY_60_QUOTE, FactStatus.DISPUTED),
+            make_fact("F5", ARMY_150_TEXT, ARMY_150_QUOTE, FactStatus.DISPUTED),
+        ],
+        disputes=(
+            [Dispute(fact_ids=["F4", "F5"], explanation=DISPUTE_EXPLANATION)] if grouped else []
+        ),
+    )
+
+
+@pytest.mark.parametrize("post_format", [PostFormat.LONG, PostFormat.THREAD])
+async def test_both_disputed_numbers_in_the_text_mark_the_whole_dispute_as_used(
+    post_format: PostFormat,
+) -> None:
+    reply = (
+        single(BOTH_ARMIES_TEXT, "F1")
+        if post_format is PostFormat.LONG
+        else thread(BOTH_ARMIES_TEXT, NO_DISPUTED_NUMBERS_TEXT, fact_ids=("F1",))
+    )
+    fake = ScriptedLLMClient(reply)
+
+    draft = await write(fake, post_format)
+
+    assert draft.used_fact_ids == ["F1", "F4", "F5"]
+
+
+async def test_a_text_without_the_disputed_numbers_adds_no_disputed_ids() -> None:
+    fake = ScriptedLLMClient(thread(NO_DISPUTED_NUMBERS_TEXT, "Мамай бежал.", fact_ids=("F1",)))
+
+    draft = await write(fake, PostFormat.THREAD)
+
+    assert draft.used_fact_ids == ["F1"]
+
+
+async def test_a_disputed_id_named_by_the_model_is_kept_and_completes_its_group() -> None:
+    fake = ScriptedLLMClient(single(NO_DISPUTED_NUMBERS_TEXT, "F1", "F4"))
+
+    draft = await write(fake, PostFormat.LONG)
+
+    assert draft.used_fact_ids == ["F1", "F4", "F5"]
+
+
+async def test_ids_of_undisputed_facts_stay_in_the_models_order_and_unknown_ones_go() -> None:
+    fake = ScriptedLLMClient(single(BOTH_ARMIES_TEXT, "f2", "F9", "[F1]", "S1", "F2"))
+
+    draft = await write(fake, PostFormat.LONG)
+
+    assert draft.used_fact_ids == ["F2", "F1", "F4", "F5"]
+
+
+async def test_one_stated_disputed_number_pulls_in_the_rest_of_the_group() -> None:
+    fake = ScriptedLLMClient(single(ONLY_60_TEXT, "F1"))
+
+    draft = await write(fake, PostFormat.LONG)
+
+    assert draft.used_fact_ids == ["F1", "F4", "F5"]
+
+
+async def test_added_ids_follow_the_fact_set_not_the_order_of_the_text() -> None:
+    fake = ScriptedLLMClient(single("Одни пишут о 150 000 человек, другие о 60 000.", "F3", "F1"))
+
+    draft = await write(fake, PostFormat.LONG)
+
+    assert draft.used_fact_ids == ["F3", "F1", "F4", "F5"]
+
+
+async def test_a_disputed_fact_needs_all_of_its_numbers_in_the_text() -> None:
+    fact_set = FactSet(
+        topic=TOPIC,
+        facts=[
+            make_fact("F1", DATE_TEXT, DATE_QUOTE, FactStatus.CONFIRMED),
+            make_fact(
+                "F2",
+                "В 1382 году войско оценивали в 60 000 человек.",
+                ARMY_60_QUOTE,
+                FactStatus.DISPUTED,
+            ),
+        ],
+        disputes=[],
+    )
+    fake = ScriptedLLMClient(
+        single(ONLY_60_TEXT, "F1"), single(ONLY_60_TEXT + " В 1382 году.", "F1")
+    )
+
+    partial = await write(fake, PostFormat.LONG, fact_set=fact_set)
+    complete = await write(fake, PostFormat.LONG, fact_set=fact_set)
+
+    assert partial.used_fact_ids == ["F1"]
+    assert complete.used_fact_ids == ["F1", "F2"]
+
+
+async def test_a_numberless_disputed_fact_is_used_only_when_the_model_names_it() -> None:
+    fact_set = numbered_dispute_fact_set(numberless=True, grouped=False)
+    fake = ScriptedLLMClient(
+        single(NUMBERLESS_TEXT + " " + NO_DISPUTED_NUMBERS_TEXT, "F1"),
+        single(NUMBERLESS_TEXT, "F1", "F4"),
+    )
+
+    unnamed = await write(fake, PostFormat.LONG, fact_set=fact_set)
+    named = await write(fake, PostFormat.LONG, fact_set=fact_set)
+
+    assert unnamed.used_fact_ids == ["F1"]
+    assert named.used_fact_ids == ["F1", "F4"]
+
+
+async def test_a_numberless_member_of_a_group_joins_through_its_numbered_partner() -> None:
+    fact_set = numbered_dispute_fact_set(numberless=True, grouped=True)
+    fake = ScriptedLLMClient(single("Другие называют 150 000 человек.", "F1"))
+
+    draft = await write(fake, PostFormat.LONG, fact_set=fact_set)
+
+    assert draft.used_fact_ids == ["F1", "F4", "F5"]
+
+
+async def test_a_disputed_fact_without_a_group_is_found_by_its_numbers_alone() -> None:
+    fact_set = numbered_dispute_fact_set(numberless=False, grouped=False)
+    fake = ScriptedLLMClient(single(ONLY_60_TEXT, "F1"))
+
+    draft = await write(fake, PostFormat.LONG, fact_set=fact_set)
+
+    assert draft.used_fact_ids == ["F1", "F4"]
+
+
+async def test_numbering_prefixes_do_not_count_as_numbers_of_the_text() -> None:
+    fact_set = FactSet(
+        topic=TOPIC,
+        facts=[
+            make_fact("F1", DATE_TEXT, DATE_QUOTE, FactStatus.CONFIRMED),
+            make_fact("F2", "В походе участвовали 2 полка.", ARMY_60_QUOTE, FactStatus.DISPUTED),
+        ],
+        disputes=[],
+    )
+    fake = ScriptedLLMClient(
+        thread("Мамай шёл на Русь.", "Дмитрий вышел навстречу.", fact_ids=("F1",))
+    )
+
+    draft = await write(
+        fake, PostFormat.THREAD, make_limits(thread_numbering=True), fact_set=fact_set
+    )
+
+    assert draft.rendered[0].startswith("1/ ")
+    assert draft.used_fact_ids == ["F1"]
+
+
+async def test_a_short_post_marks_a_dispute_that_was_offered_to_the_model() -> None:
+    fake = ScriptedLLMClient(single(BOTH_ARMIES_TEXT, "F1"))
+
+    draft = await write(fake, limits=DISPUTE_OFFERED_LIMITS)
+
+    assert ARMY_60_TEXT in user_text(fake.calls[0][0])
+    assert draft.used_fact_ids == ["F1", "F4", "F5"]
+
+
+async def test_a_short_post_never_marks_a_dispute_the_model_was_not_given() -> None:
+    fake = ScriptedLLMClient(single(BOTH_ARMIES_TEXT, "F1"))
+
+    draft = await write(fake)
+
+    assert ARMY_60_TEXT not in user_text(fake.calls[0][0])
+    assert draft.used_fact_ids == ["F1"]
+
+
+async def test_the_retry_text_is_the_one_checked_for_disputed_numbers() -> None:
+    fake = ScriptedLLMClient(
+        single(OVERLONG_SHORT + " " + BOTH_ARMIES_TEXT, "F1"),
+        single(NO_DISPUTED_NUMBERS_TEXT, "F1"),
+    )
+
+    draft = await write(fake, limits=DISPUTE_OFFERED_LIMITS)
+
+    assert draft.attempts == 2
+    assert draft.used_fact_ids == ["F1"]
+
+
+async def test_the_writing_prompt_asks_for_disputed_facts_in_fact_ids() -> None:
+    fake = ScriptedLLMClient(single(NO_DISPUTED_NUMBERS_TEXT, "F1"))
+
+    await write(fake, PostFormat.LONG)
+
+    assert "the disputed facts the post mentions" in system_text(fake.calls[0][0])
