@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Literal
 
@@ -22,6 +23,11 @@ class SourceRef(BaseModel):
     url: str
     domain: str
     quote: str
+    weak: bool = False
+
+
+def all_weak(support: Sequence[SourceRef]) -> bool:
+    return all(ref.weak for ref in support)
 
 
 class Fact(BaseModel):
@@ -31,6 +37,10 @@ class Fact(BaseModel):
     text: str
     support: list[SourceRef] = Field(min_length=1)
     status: FactStatus
+
+    @property
+    def weak_only(self) -> bool:
+        return all_weak(self.support)
 
 
 class Dispute(BaseModel):
@@ -69,6 +79,11 @@ class ExtractionStats(BaseModel):
     dispute_unknown_ids: int = Field(default=0, ge=0)
     facts_disputed: int = Field(default=0, ge=0)
     facts_cut_by_limit: int = Field(default=0, ge=0)
+    support_weak: int = Field(default=0, ge=0)
+    facts_weak_only: int = Field(default=0, ge=0)
+    facts_lost_confirmed_by_weak: int = Field(default=0, ge=0)
+    facts_cut_by_domain_cap: int = Field(default=0, ge=0)
+    facts_domain_cap_restored: int = Field(default=0, ge=0)
     facts_kept: int = Field(default=0, ge=0)
 
     @property

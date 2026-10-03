@@ -132,6 +132,28 @@ FACTS_DEFAULT_MIN_FACTS = 3
 FACTS_DEFAULT_DOMAIN_GROUPS: tuple[tuple[str, ...], ...] = (
     ("wikipedia.org", "wikimedia.org", "ruwiki.ru", "wikiwand.com"),
 )
+FACTS_DEFAULT_MAX_PER_DOMAIN = 6
+FACTS_DEFAULT_WEAK_DOMAINS: tuple[str, ...] = (
+    "youtube.com",
+    "youtu.be",
+    "rutube.ru",
+    "livejournal.com",
+    "blogspot.com",
+    "wordpress.com",
+    "medium.com",
+    "vk.com",
+    "ok.ru",
+    "dzen.ru",
+    "pikabu.ru",
+    "reddit.com",
+    "quora.com",
+    "otvet.mail.ru",
+    "infourok.ru",
+    "nsportal.ru",
+    "multiurok.ru",
+    "slider-ai.ru",
+)
+WEAK_USED_WARNING_RATIO = 0.5
 FACTS_DOMAIN_GROUPS_SEPARATOR = ";"
 FACTS_DOMAIN_MEMBERS_SEPARATOR = ","
 FACT_EXTRACTION_MAX_TOKENS = 8000

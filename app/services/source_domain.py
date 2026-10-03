@@ -17,3 +17,7 @@ def source_domain(url: str, groups: Sequence[Sequence[str]]) -> str:
             return group[0]
     labels = host.split(DOMAIN_LABEL_SEPARATOR)
     return DOMAIN_LABEL_SEPARATOR.join(labels[-REGISTRABLE_DOMAIN_LABELS:])
+
+
+def is_weak_source(url: str, weak_domains: Sequence[str]) -> bool:
+    return host_matches(normalize_host(url_host(url)), [normalize_host(d) for d in weak_domains])

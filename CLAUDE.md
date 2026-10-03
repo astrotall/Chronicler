@@ -95,7 +95,9 @@ the orchestration in `app/services/pipeline.py`, the state behind the `RunStore`
 `app/services/run_store.py`, the outcome models in `app/domain/pipeline.py`, the button revisions
 and angles in `app/prompts/revisions.py`, and in `app/bot` the handlers, the background jobs
 (`jobs.py`, `flow.py`), the progress message, the input parsing (`requests.py`), the message
-formatting (`formatting.py`), the keyboard and all the Russian texts (`messages.py`). `db` does
+formatting (`formatting.py`), the keyboard and all the Russian texts (`messages.py`). HIS-28
+added the weak domains and the per-domain cap: `SourceRef.weak`, `is_weak_source` in
+`app/services/source_domain.py` and the selection rules in `app/services/fact_selection.py`. `db` does
 not exist yet.
 
 ## Detailed guides

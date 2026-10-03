@@ -28,12 +28,14 @@ from app.domain.fact import (
     FactStatus,
     InsufficientFacts,
     SourceRef,
+    all_weak,
 )
 from app.domain.snippet import Snippet
 from app.llm.client import LLMClient
 from app.prompts.fact_extraction import render_dispute_check, render_fact_extraction
+from app.services.fact_selection import Selection, select_facts
 from app.services.quote_check import QuoteCheck, check_quote, numbers_supported, text_segments
-from app.services.source_domain import source_domain
+from app.services.source_domain import is_weak_source, source_domain
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,6 @@ type Explanation = Annotated[
 ]
 
 ALIAS_WRAPPING = "[] "
-STATUS_PRIORITY: dict[FactStatus, int] = {FactStatus.CONFIRMED: 0, FactStatus.SINGLE: 1}
 
 
 class ExtractedSupport(BaseModel):
@@ -112,6 +113,9 @@ class FactLimits(BaseModel):
     max_facts: int = Field(ge=1)
     min_facts: int = Field(ge=1)
     domain_groups: tuple[tuple[str, ...], ...] = ()
+    weak_domains: tuple[str, ...] = ()
+    max_per_domain: int | None = Field(default=None, ge=1)
+    domain_cap_floor: int = Field(default=0, ge=0)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Self:
@@ -121,6 +125,9 @@ class FactLimits(BaseModel):
             max_facts=settings.facts_max_facts,
             min_facts=settings.facts_min_facts,
             domain_groups=tuple(tuple(group) for group in settings.facts_domain_groups),
+            weak_domains=tuple(settings.facts_weak_domains),
+            max_per_domain=settings.facts_max_per_domain,
+            domain_cap_floor=max(settings.facts_min_facts, settings.thread_min_facts),
         )
 
 
@@ -134,10 +141,25 @@ class CandidateCheck(BaseModel):
 
     @property
     def status(self) -> FactStatus:
-        domains = {ref.domain for ref in self.support}
-        if len(domains) >= CONFIRMED_MIN_DOMAINS:
+        if len(self.independent_domains) >= CONFIRMED_MIN_DOMAINS:
             return FactStatus.CONFIRMED
         return FactStatus.SINGLE
+
+    @property
+    def independent_domains(self) -> set[str]:
+        return {ref.domain for ref in self.support if not ref.weak}
+
+    @property
+    def lost_confirmed_by_weak(self) -> bool:
+        all_domains = {ref.domain for ref in self.support}
+        return (
+            len(all_domains) >= CONFIRMED_MIN_DOMAINS
+            and len(self.independent_domains) < CONFIRMED_MIN_DOMAINS
+        )
+
+    @property
+    def weak_only(self) -> bool:
+        return all_weak(self.support)
 
 
 class FoundDispute(BaseModel):
@@ -235,6 +257,7 @@ def verify_candidate(
                         url=snippet.url,
                         domain=source_domain(snippet.url, limits.domain_groups),
                         quote=item.quote,
+                        weak=is_weak_source(snippet.url, limits.weak_domains),
                     )
                 )
         if verdict not in (SupportVerdict.VERIFIED, SupportVerdict.DUPLICATE):
@@ -300,11 +323,12 @@ def build_stats(
     checks: Sequence[CandidateCheck],
     dispute_check: DisputeCheck,
     facts_disputed: int,
-    facts_cut_by_limit: int,
+    selection: Selection,
     facts_kept: int,
 ) -> ExtractionStats:
     support = Counter(verdict for check in checks for verdict in check.support_verdicts)
     outcomes = Counter(check.verdict for check in checks)
+    verified = [check for check in checks if check.verdict is CandidateVerdict.VERIFIED]
     return ExtractionStats(
         snippets=snippets,
         snippets_truncated=snippets_truncated,
@@ -327,7 +351,12 @@ def build_stats(
         disputes_withdrawn=dispute_check.withdrawn,
         dispute_unknown_ids=dispute_check.unknown_ids,
         facts_disputed=facts_disputed,
-        facts_cut_by_limit=facts_cut_by_limit,
+        facts_cut_by_limit=selection.cut_by_limit,
+        support_weak=sum(ref.weak for check in verified for ref in check.support),
+        facts_weak_only=sum(check.weak_only for check in verified),
+        facts_lost_confirmed_by_weak=sum(check.lost_confirmed_by_weak for check in verified),
+        facts_cut_by_domain_cap=selection.cut_by_domain_cap,
+        facts_domain_cap_restored=selection.restored_by_floor,
         facts_kept=facts_kept,
     )
 
@@ -364,11 +393,14 @@ async def extract_facts(
     dispute_check = await find_disputes(client, verified)
 
     disputed = {index for dispute in dispute_check.disputes for index in dispute.members}
-    assertable = sorted(
-        (index for index in range(len(verified)) if index not in disputed),
-        key=lambda index: STATUS_PRIORITY[verified[index].status],
+    selection = select_facts(
+        verified,
+        [index for index in range(len(verified)) if index not in disputed],
+        max_facts=limits.max_facts,
+        floor=max(limits.min_facts, limits.domain_cap_floor),
+        max_per_domain=limits.max_per_domain,
     )
-    kept = assertable[: limits.max_facts]
+    kept = list(selection.kept)
     ordered = kept + sorted(disputed)
     final_ids = {index: fact_id(position + 1) for position, index in enumerate(ordered)}
     facts = [
@@ -398,7 +430,7 @@ async def extract_facts(
         checks=checks,
         dispute_check=dispute_check,
         facts_disputed=len(disputed),
-        facts_cut_by_limit=len(assertable) - len(kept),
+        selection=selection,
         facts_kept=len(facts),
     )
     log_stats(stats)

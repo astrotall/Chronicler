@@ -102,3 +102,47 @@ def test_a_fact_with_an_unknown_status_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError):
         load_fact_set(path)
+
+
+def test_the_weak_flag_survives_a_round_trip() -> None:
+    weak_set = FactSet(
+        topic="Слабые",
+        facts=[
+            Fact(
+                id="F1",
+                text="Факт.",
+                status=FactStatus.SINGLE,
+                support=[
+                    SourceRef(
+                        snippet_id="S1",
+                        url="https://www.youtube.com/watch",
+                        domain="youtube.com",
+                        quote=QUOTE,
+                        weak=True,
+                    ),
+                    SourceRef(snippet_id="S2", url="https://kp.ru/a", domain="kp.ru", quote=QUOTE),
+                ],
+            )
+        ],
+        disputes=[],
+    )
+
+    loaded = fact_set_of(snapshot_of(weak_set))
+
+    assert [(ref.domain, ref.weak) for ref in loaded.facts[0].support] == [
+        ("youtube.com", True),
+        ("kp.ru", False),
+    ]
+
+
+def test_an_old_snapshot_without_weak_domains_loads_as_not_weak(tmp_path: Path) -> None:
+    raw = snapshot_of(FACT_SET).model_dump(mode="json")
+    for fact in raw["facts"]:
+        del fact["weak_domains"]
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps({FACT_SET_KEY: raw}), encoding="utf-8")
+
+    loaded = load_fact_set(path)
+
+    assert not any(ref.weak for fact in loaded.facts for ref in fact.support)
+    assert not any(fact.weak_only for fact in loaded.facts)

@@ -16,8 +16,8 @@ verifies the links in between.
 2. **Research.** Sources return snippets for each query.
 3. **Extract facts.** The model pulls atomic facts in Russian, each with verbatim quotes from
    the snippets. Code checks every quote really occurs in its snippet and every number of a fact
-   occurs in its quotes; what fails is dropped. Code marks a fact `confirmed` (2+ independent
-   domains) or `single`, a second model pass finds contradictions, and those facts become
+   occurs in its quotes; what fails is dropped. Code marks a fact `confirmed` (2+ independent,
+   not weak domains) or `single`, a second model pass finds contradictions, and those facts become
    `disputed`. Too few facts is a result shown to the author, not a guess.
 4. **Write.** The model writes a short post, a long post or a thread strictly from the facts; the
    topic only frames the post, and the post adds no conclusion or claim of importance the facts
@@ -113,9 +113,11 @@ cancelled with a message.
 2. Warnings, only if there are any: numbers in the post that are not among the facts, a length
    over the limit, style violations the filter could not remove (rule, fragment, explanation), the
    critic did not check the text, a regeneration failed and the best version is shown, the end of
-   the post was cut, or a thread became a short post because there were too few facts.
+   the post was cut, a thread became a short post because there were too few facts, or more than half
+   of the facts in the post stand on weak sources only.
 3. The facts: each with its id, its status and links to its sources. "подтверждён" means two or
-   more independent domains, "один источник" one domain, **СПОРНО** that the sources contradict
+   more independent domains that are not weak, "один источник" one domain or only weak ones, a
+   link marked "слабый" is a source from `FACTS_WEAK_DOMAINS`, **СПОРНО** that the sources contradict
    each other, with the reason. The first answer lists the facts used in the post and the rest
    separately, plus the sources that did not answer, if any.
 
@@ -242,6 +244,8 @@ uv run pytest tests/test_research_live.py -m integration
 | `FACTS_MAX_FACTS`        | Most facts kept, 20 by default. Disputed facts are kept on top of it      |
 | `FACTS_MIN_FACTS`        | Fewest facts that can be stated for a post, 3 by default. Must not exceed `FACTS_MAX_FACTS` |
 | `FACTS_DOMAIN_GROUPS`    | Domains counted as one source: members separated by `,`, groups by `;`. Default `wikipedia.org,wikimedia.org,ruwiki.ru,wikiwand.com`. Empty means no groups |
+| `FACTS_WEAK_DOMAINS`     | Comma-separated domains and their subdomains that do not count as an independent source: video, blog hosting, social networks, Q&A, school presentations, AI slide makers (18 by default, see `.env.example`). Their pages stay in the snippets, are marked "слабый", cannot make a fact `confirmed` and sort below other facts. Empty turns the rule off. Not the same as `RESEARCH_BLOCKED_DOMAINS`, which drops a page before extraction |
+| `FACTS_MAX_PER_DOMAIN`   | Most facts one domain may hold among the facts that are not disputed, 6 by default. The cap yields when it would leave fewer than the larger of `FACTS_MIN_FACTS` and `THREAD_MIN_FACTS` |
 
 The live test sends two Wikipedia articles from `tests/fixtures` to DeepSeek and checks that
 verified facts come out; it needs `DEEPSEEK_API_KEY`:

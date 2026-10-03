@@ -49,7 +49,8 @@ Input: the topic and the snippets. Output: `FactsExtracted` (a `FactSet`) or `In
   numbers of its verified quotes (see "Number check"). Otherwise the fact is dropped: the
   translation into Russian is the one place the model could change a figure, and step 4 checks
   the post's numbers against the text of the facts.
-- Code assigns `confirmed` or `single` from the domains behind the verified support.
+- Code assigns `confirmed` or `single` from the independent, not weak, domains behind the verified
+  support (see "Status" below), and marks every support item `weak` or not.
 - A second LLM pass on the same step looks for contradictions. It sees only the ids and texts of
   the verified facts, before the limit, and returns groups of contradicting facts with a short
   explanation and a verdict. Code turns the groups into `disputed`.
@@ -118,10 +119,28 @@ The domain of a support item is computed from its url (`app/services/source_doma
    `wikipedia.org,wikimedia.org,ruwiki.ru,wikiwand.com`.
 3. Otherwise the domain is the last two labels of the host: `news.example.com` is `example.com`.
 
-Two or more different domains among the verified support make the fact `confirmed`, otherwise it
-is `single`. Without a public suffix list the last two labels sometimes merge unrelated sites
+Two or more different domains among the verified support that are **not weak** make the fact
+`confirmed`, otherwise it is `single`. Without a public suffix list the last two labels sometimes merge unrelated sites
 (`bbc.co.uk` and `x.co.uk` are both `co.uk`). That errs towards `single`, never towards a false
 `confirmed`.
+
+#### Weak sources
+
+A weak source is a page whose host equals a domain of `FACTS_WEAK_DOMAINS` or is its subdomain
+(`is_weak_source` in `app/services/source_domain.py`). The host is normalised like the domain above
+(case, trailing dot, `www.`), but it is matched as a host and not as the last two labels, so
+`otvet.mail.ru` can be weak while `news.mail.ru` is not. The default list holds video platforms,
+blog hosting, social networks and Q&A sites, school presentation sites and AI slide generators;
+the author edits it in `.env`, an empty value turns the rule off.
+
+A weak source is not a blocked one. `RESEARCH_BLOCKED_DOMAINS` drops a page before extraction, so
+the model never sees it. A weak page stays in the snippets and in `Fact.support`, the author sees
+its link marked "слабый", but it is not an independent source:
+
+- `SourceRef.weak` is set by code at verification (default `False`, so older snapshots load).
+- A weak domain does not count towards `confirmed`. Two non-weak domains plus a weak one are still
+  `confirmed`; one non-weak plus a weak one, or only weak ones, are `single`.
+- `Fact.weak_only` is true when every support item is weak.
 
 #### Contradictions
 
@@ -138,13 +157,32 @@ is `single`. Without a public suffix list the last two labels sometimes merge un
 
 #### Limit, minimum and ids
 
-- Facts that are not disputed are sorted `confirmed` first, then `single`, keeping the model's
-  order inside each status. The first `FACTS_MAX_FACTS` (20) are kept.
+- Facts that are not disputed are sorted in three steps: `confirmed`, then `single` with at least
+  one non-weak source, then `single` with weak sources only (`fact_priority` in
+  `app/services/fact_selection.py`), keeping the model's order inside a step. A weak fact is never
+  removed for being weak, it only goes lower.
+- **Domain cap.** `FACTS_MAX_PER_DOMAIN` (6) limits how many places one domain takes among the
+  facts that are not disputed. Walking the sorted list, a fact is accepted if at least one of its
+  domains has room, and it is charged to the least loaded of its non-weak domains (of all its
+  domains if every one is weak), the first in support order on a tie. So a fact that stands on
+  Wikipedia and on a news site is not pushed out because Wikipedia is full. Facts that do not fit
+  are set aside, and the next facts of other domains take their places.
+- The first `FACTS_MAX_FACTS` (20) of the accepted facts are kept.
+- **The cap yields to the floor.** If fewer than `max(FACTS_MIN_FACTS, THREAD_MIN_FACTS)` facts
+  are kept (5 by default; never more than `FACTS_MAX_FACTS`), the facts set aside come back in
+  priority order until the floor is reached. This way the cap never turns a requested thread into a
+  short post and never alone causes `InsufficientFacts`. The floor does not invent facts: a set
+  that is short without the cap stays short.
 - Disputed facts are always kept, on top of the limit, so the author sees them.
 - The output is the kept facts, then the disputed ones; ids `F1`, `F2`... follow this order.
+- Disputed facts ignore the cap and do not take its places.
 - If fewer than `FACTS_MIN_FACTS` (3) facts are kept that are not disputed, the result is
   `InsufficientFacts` with whatever survived. Disputed facts never count towards the minimum,
   because they cannot be stated. Code never fills the gap.
+- The `ExtractionStats` of the weak and cap rules, counted over the verified facts before the cut:
+  `support_weak`, `facts_weak_only`, `facts_lost_confirmed_by_weak` (would be `confirmed` by all
+  domains, is `single` without the weak ones), `facts_cut_by_domain_cap` (left out by the cap, net
+  of the facts that came back), `facts_domain_cap_restored`. Counters only, never domains or texts.
 - At most 40 candidates from the model are used, the first ones. The model is asked for at most
   40 but sometimes returns more; the extra ones are dropped and counted, not rejected, because a
   retry of the whole reply costs a full extraction.

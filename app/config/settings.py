@@ -17,8 +17,10 @@ from app.config.constants import (
     FACTS_DEFAULT_DOMAIN_GROUPS,
     FACTS_DEFAULT_INPUT_MAX_CHARS,
     FACTS_DEFAULT_MAX_FACTS,
+    FACTS_DEFAULT_MAX_PER_DOMAIN,
     FACTS_DEFAULT_MIN_FACTS,
     FACTS_DEFAULT_MIN_QUOTE_CHARS,
+    FACTS_DEFAULT_WEAK_DOMAINS,
     FACTS_DOMAIN_GROUPS_SEPARATOR,
     FACTS_DOMAIN_MEMBERS_SEPARATOR,
     LONG_DEFAULT_MAX_CHARS,
@@ -138,6 +140,10 @@ class Settings(BaseSettings):
     facts_domain_groups: Annotated[list[list[str]], NoDecode] = Field(
         default_factory=lambda: [list(group) for group in FACTS_DEFAULT_DOMAIN_GROUPS]
     )
+    facts_weak_domains: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(FACTS_DEFAULT_WEAK_DOMAINS)
+    )
+    facts_max_per_domain: int = Field(default=FACTS_DEFAULT_MAX_PER_DOMAIN, ge=1)
 
     short_max_chars: int = Field(default=SHORT_DEFAULT_MAX_CHARS, ge=1)
     short_max_facts: int = Field(default=SHORT_DEFAULT_MAX_FACTS, ge=1)
@@ -177,7 +183,12 @@ class Settings(BaseSettings):
             return [part for part in parts if part]
         return value
 
-    @field_validator("research_allowed_domains", "research_blocked_domains", mode="before")
+    @field_validator(
+        "research_allowed_domains",
+        "research_blocked_domains",
+        "facts_weak_domains",
+        mode="before",
+    )
     @classmethod
     def split_domains(cls, value: object) -> object:
         if isinstance(value, str):
