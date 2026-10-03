@@ -8,6 +8,8 @@ from app.bot.handlers import build_router
 from app.bot.middlewares import OwnerOnlyMiddleware
 from app.config.constants import CONFIG_ERROR_HEADER, LOG_FORMAT
 from app.config.settings import Settings
+from app.llm.errors import LLMConfigError
+from app.llm.factory import validate_provider_keys
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +36,20 @@ async def run(settings: Settings) -> None:
     await dispatcher.start_polling(bot)
 
 
-def main() -> None:
+def load_settings() -> Settings:
     try:
         settings = Settings()
     except ValidationError as error:
         raise SystemExit(describe_config_error(error)) from error
+    try:
+        validate_provider_keys(settings)
+    except LLMConfigError as error:
+        raise SystemExit("\n".join([CONFIG_ERROR_HEADER, str(error)])) from error
+    return settings
+
+
+def main() -> None:
+    settings = load_settings()
     logging.basicConfig(level=settings.log_level, format=LOG_FORMAT)
     asyncio.run(run(settings))
 

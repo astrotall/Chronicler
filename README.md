@@ -45,9 +45,9 @@ data/
   docs/             pipeline, style rules, architecture, decisions
 ```
 
-At the moment `app/` holds the skeleton only: settings, an owner-only bot with `/start` and a
-stub for plain text. `llm`, `research`, `services`, `prompts` and `domain` are empty packages
-that later tickets fill.
+At the moment `app/` holds settings, an owner-only bot with `/start` and a stub for plain text,
+and the LLM client (`app/llm`, DeepSeek and Anthropic). `research` and `services` are empty
+packages that later tickets fill.
 
 ## Running
 
@@ -69,6 +69,48 @@ make run                      # start the bot (aiogram polling)
 
 A missing or invalid variable stops the start with a message naming it. Updates from any other
 Telegram ID are ignored without a reply and logged as one line without the message text.
+
+### LLM providers
+
+The bot calls a model on four pipeline steps: `query_planning`, `fact_extraction`, `writing`,
+`style_critique`. Each step has its own provider and model. By default every step runs on
+DeepSeek, so only `DEEPSEEK_API_KEY` is required.
+
+| Variable                       | Meaning                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `DEEPSEEK_API_KEY`             | DeepSeek key. Required while any step uses DeepSeek                  |
+| `ANTHROPIC_API_KEY`            | Anthropic key. Required only if some step uses Anthropic             |
+| `DEEPSEEK_MODEL`               | DeepSeek model for steps without their own model, `deepseek-flash`   |
+| `ANTHROPIC_MODEL`              | Anthropic model for steps without their own model, `claude-sonnet-5-5` |
+| `DEEPSEEK_THINKING`            | `true` turns on DeepSeek thinking mode, default `false`              |
+| `LLM_<STEP>_PROVIDER`          | `deepseek` or `anthropic`, for example `LLM_WRITING_PROVIDER`        |
+| `LLM_<STEP>_MODEL`             | Model for that step; empty means the provider's model above          |
+| `LLM_CONNECT_TIMEOUT_SECONDS`, `LLM_READ_TIMEOUT_SECONDS` | HTTP timeouts                             |
+| `LLM_ATTEMPT_TIMEOUT_SECONDS`  | Hard deadline for one request attempt, 300 by default                |
+| `LLM_MAX_RETRIES`              | Retries on network errors, 429 and 5xx, 3 by default                 |
+| `LLM_RETRY_BASE_DELAY_SECONDS`, `LLM_RETRY_MAX_DELAY_SECONDS` | Exponential pause between retries, and its cap |
+| `LLM_JSON_MAX_RETRIES`         | Extra attempts when a structured reply is not valid JSON, 2 by default |
+
+`DEEPSEEK_BASE_URL`, `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_VERSION` are in `.env.example` with
+their official values and normally stay as they are.
+
+To move the writing step to Anthropic, add two lines to `.env` and restart:
+
+```bash
+LLM_WRITING_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Add `LLM_WRITING_MODEL=claude-opus-5-5` to pick a model other than `ANTHROPIC_MODEL`. No code
+changes. If a step uses a provider whose key is missing, the bot stops at startup and names the
+variable.
+
+Live tests send a short real request to each provider whose key is set (from the environment or
+`.env`); `make test` never runs them:
+
+```bash
+uv run pytest -m integration
+```
 
 ## Before committing
 
