@@ -61,8 +61,13 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync                       # install dependencies from uv.lock
 cp .env.example .env          # then fill in the values
+make setup-hooks              # once after cloning: turn on the git hooks
 make run                      # start the bot (aiogram polling)
 ```
+
+`make setup-hooks` points git at `.githooks/`, so every `git commit` first runs `make check` and
+`make test` and is blocked if either fails. It is a per-clone setting, so run it once after each
+clone.
 
 `.env` holds the secrets and is never committed:
 
@@ -181,7 +186,10 @@ make test     # pytest
 make format   # ruff format and ruff check --fix, to repair what make check reports
 ```
 
-The same two commands run in CI on every pull request (`.github/workflows/ci.yml`).
+After `make setup-hooks` the pre-commit hook runs both for you (a few seconds) and blocks the
+commit on a failure. It changes and stages nothing and makes no network calls; live
+(`integration`) tests never run in it. `git commit --no-verify` skips it, but CI runs the same two
+commands on every pull request (`.github/workflows/ci.yml`), so skipping only delays the failure.
 
 Never commit to `main` directly, and never push without asking. Branches, commits and pull
 requests, including the Jira `HIS-` key convention, are in [CONTRIBUTING.md](CONTRIBUTING.md).

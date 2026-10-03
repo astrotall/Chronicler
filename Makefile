@@ -1,4 +1,4 @@
-.PHONY: check test run format
+.PHONY: check test run format setup-hooks
 
 check:
 	uv run ruff format --check .
@@ -14,3 +14,6 @@ run:
 format:
 	uv run ruff format .
 	uv run ruff check --fix .
+
+setup-hooks:
+	git config core.hooksPath .githooks
