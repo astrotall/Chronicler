@@ -77,6 +77,10 @@ def make_limits(
     thread_tweet_max_chars: int = 280,
     thread_max_tweets: int = 12,
     thread_numbering: bool = False,
+    short_max_facts: int = 3,
+    short_sentence_chars: int = 80,
+    short_length_retries: int = 2,
+    short_drop_tail: bool = False,
 ) -> WritingLimits:
     return WritingLimits(
         short_max_chars=short_max_chars,
@@ -84,10 +88,15 @@ def make_limits(
         thread_tweet_max_chars=thread_tweet_max_chars,
         thread_max_tweets=thread_max_tweets,
         thread_numbering=thread_numbering,
+        short_max_facts=short_max_facts,
+        short_sentence_chars=short_sentence_chars,
+        short_length_retries=short_length_retries,
+        short_drop_tail=short_drop_tail,
     )
 
 
 LIMITS = make_limits()
+ALL_FACTS_LIMITS = make_limits(short_max_facts=10)
 
 
 def single(text: str, *fact_ids: str) -> dict[str, object]:
@@ -214,11 +223,11 @@ async def test_empty_fact_set_is_rejected_before_calling_the_llm() -> None:
     assert fake.calls == []
 
 
-async def test_overlong_post_is_retried_once_with_the_exact_problem() -> None:
+async def test_overlong_long_post_is_retried_once_with_the_exact_problem() -> None:
     long_text = "а" * 300
     fake = ScriptedLLMClient(single(long_text, "F1"), single("Короче.", "F2"))
 
-    draft = await write(fake)
+    draft = await write(fake, PostFormat.LONG, make_limits(long_max_chars=280))
 
     assert draft.texts == ["Короче."]
     assert draft.used_fact_ids == ["F2"]
@@ -233,12 +242,12 @@ async def test_overlong_post_is_retried_once_with_the_exact_problem() -> None:
     assert "part 1: 300 characters, the limit is 280" in correction.content
 
 
-async def test_post_still_overlong_after_the_retry_is_returned_whole_and_marked() -> None:
+async def test_long_post_still_overlong_after_the_retry_is_returned_whole_and_marked() -> None:
     first = "а" * 300
     second = "б" * 290
     fake = ScriptedLLMClient(single(first, "F1"), single(second, "F1"))
 
-    draft = await write(fake)
+    draft = await write(fake, PostFormat.LONG, make_limits(long_max_chars=280))
 
     assert len(fake.calls) == 2
     assert draft.texts == [second]
@@ -408,7 +417,7 @@ async def test_a_number_from_the_topic_alone_is_unverified() -> None:
 async def test_disputed_facts_are_never_in_the_block_of_facts_to_state() -> None:
     fake = ScriptedLLMClient(single("Текст.", "F1"))
 
-    await write(fake)
+    await write(fake, limits=ALL_FACTS_LIMITS)
 
     prompt = user_text(fake.calls[0][0])
     stated, disputed = prompt.split(DISPUTES_HEADER)
@@ -436,7 +445,7 @@ async def test_a_fact_is_treated_as_disputed_by_status_or_by_group() -> None:
     )
     fake = ScriptedLLMClient(single("Текст.", "F1"))
 
-    await write(fake, fact_set=fact_set)
+    await write(fake, limits=ALL_FACTS_LIMITS, fact_set=fact_set)
 
     stated, disputed = user_text(fake.calls[0][0]).split(DISPUTES_HEADER)
     assert DATE_TEXT in stated
@@ -608,3 +617,237 @@ def test_a_single_post_has_exactly_one_part() -> None:
             length_violations=[],
             attempts=1,
         )
+
+
+async def test_short_prompt_gets_only_the_selected_facts_and_the_budget() -> None:
+    fake = ScriptedLLMClient(single("Текст.", "F1"))
+
+    draft = await write(fake)
+
+    messages = fake.calls[0][0]
+    prompt = user_text(messages)
+    for text in (DATE_TEXT, WINNER_TEXT, PLACE_TEXT):
+        assert text in prompt
+    for text in (ARMY_60_TEXT, ARMY_150_TEXT, DISPUTE_EXPLANATION):
+        assert text not in prompt
+    assert DISPUTES_HEADER not in prompt
+    system = system_text(messages)
+    assert "at most 3 sentences, each sentence at most 80 characters" in system
+    assert "at most 280 characters in total" in system
+    assert "Aim well below" not in system
+    assert draft.dropped_tail == []
+
+
+async def test_short_prompt_gets_a_dispute_whole_when_it_fits() -> None:
+    fake = ScriptedLLMClient(single("Текст.", "F1"))
+
+    await write(fake, limits=make_limits(short_max_facts=5))
+
+    stated, disputed = user_text(fake.calls[0][0]).split(DISPUTES_HEADER)
+    assert ARMY_60_TEXT not in stated
+    assert ARMY_60_TEXT in disputed
+    assert ARMY_150_TEXT in disputed
+    assert DISPUTE_EXPLANATION in disputed
+
+
+async def test_the_sentence_budget_follows_the_configured_values() -> None:
+    fake = ScriptedLLMClient(single("Текст.", "F1"))
+
+    await write(fake, limits=make_limits(short_max_chars=200, short_sentence_chars=100))
+
+    assert "at most 2 sentences, each sentence at most 100 characters" in system_text(
+        fake.calls[0][0]
+    )
+
+
+async def test_ids_of_facts_left_out_of_the_short_prompt_are_still_known() -> None:
+    fake = ScriptedLLMClient(single("Текст.", "F1", "F4"))
+
+    draft = await write(fake)
+
+    assert draft.used_fact_ids == ["F1", "F4"]
+
+
+LONG_SENTENCE = "Войско Дмитрия Ивановича разбило войско Мамая у впадения Непрядвы в Дон. "
+OVERLONG_SHORT = "Битва 8 сентября 1380 года. " + LONG_SENTENCE * 4 + "Мамай бежал."
+
+
+async def test_short_correction_names_the_sentence_to_cut_and_the_excess() -> None:
+    cut = "Д" + "а" * 259 + "."
+    text = f"Битва 8 сентября 1380 года. {cut} Мамай бежал."
+    fake = ScriptedLLMClient(single(text, "F1"), single("Короче.", "F1"))
+
+    draft = await write(fake)
+
+    assert draft.texts == ["Короче."]
+    assert draft.attempts == 2
+    first, second = (call[0] for call in fake.calls)
+    assert second[: len(first)] == first
+    assistant, correction = second[len(first) :]
+    assert assistant.role is Role.ASSISTANT
+    assert json.loads(assistant.content)["text"] == text
+    content = correction.content
+    assert (
+        f"The post has {len(text)} characters, {len(text) - 280} over the limit of 280" in content
+    )
+    assert f"«{cut}»" in content
+    assert "Битва 8 сентября" not in content
+    assert "Мамай бежал" not in content
+    assert "at most 3 sentences" in content
+
+
+async def test_short_post_gets_two_retries_then_is_returned_whole_and_marked() -> None:
+    fake = ScriptedLLMClient(
+        single(OVERLONG_SHORT, "F1"), single(OVERLONG_SHORT, "F1"), single(OVERLONG_SHORT, "F1")
+    )
+
+    draft = await write(fake)
+
+    assert len(fake.calls) == 3
+    assert draft.attempts == 3
+    assert draft.texts == [OVERLONG_SHORT.strip()]
+    assert draft.dropped_tail == []
+    assert draft.length_violations == [
+        LengthViolation(
+            issue=LengthIssue.PART_TOO_LONG,
+            part=1,
+            actual=len(OVERLONG_SHORT.strip()),
+            limit=280,
+        )
+    ]
+    assert "over the limit of 280" in fake.calls[2][0][-1].content
+
+
+async def test_short_retries_follow_the_configured_budget() -> None:
+    fake = ScriptedLLMClient(single(OVERLONG_SHORT, "F1"))
+
+    draft = await write(fake, limits=make_limits(short_length_retries=0))
+
+    assert len(fake.calls) == 1
+    assert draft.attempts == 1
+    assert draft.length_violations
+
+
+FITTING_HEAD = "Битва 8 сентября 1380 года у Непрядвы.\n\nВойско Дмитрия разбило Мамая."
+OVERLONG_TAIL = "Затем " + "очень " * 40 + "долго шли домой."
+DROP_LIMITS = make_limits(short_drop_tail=True)
+
+
+async def test_tail_drop_is_off_by_default() -> None:
+    text = f"{FITTING_HEAD}\n\n{OVERLONG_TAIL}"
+    fake = ScriptedLLMClient(*(single(text, "F1") for _ in range(3)))
+
+    draft = await write(fake)
+
+    assert draft.texts == [text]
+    assert draft.dropped_tail == []
+    assert draft.length_violations
+
+
+async def test_tail_drop_removes_trailing_paragraphs_after_all_retries() -> None:
+    text = f"{FITTING_HEAD}\n\n{OVERLONG_TAIL}"
+    fake = ScriptedLLMClient(*(single(text, "F1", "F2") for _ in range(3)))
+
+    draft = await write(fake, limits=DROP_LIMITS)
+
+    assert len(fake.calls) == 3
+    assert draft.attempts == 3
+    assert draft.texts == [FITTING_HEAD]
+    assert draft.dropped_tail == [OVERLONG_TAIL]
+    assert draft.length_violations == []
+    assert draft.used_fact_ids == ["F1", "F2"]
+
+
+async def test_tail_drop_is_not_used_when_the_post_fits_after_a_retry() -> None:
+    text = f"{FITTING_HEAD}\n\n{OVERLONG_TAIL}"
+    fake = ScriptedLLMClient(single(text, "F1"), single("Короче.", "F1"))
+
+    draft = await write(fake, limits=DROP_LIMITS)
+
+    assert draft.texts == ["Короче."]
+    assert draft.dropped_tail == []
+
+
+async def test_tail_drop_is_skipped_when_the_post_states_a_disputed_number() -> None:
+    text = f"{FITTING_HEAD} По одним данным, их было 60 000.\n\n{OVERLONG_TAIL}"
+    fake = ScriptedLLMClient(*(single(text, "F1") for _ in range(3)))
+
+    draft = await write(fake, limits=DROP_LIMITS)
+
+    assert draft.texts == [text]
+    assert draft.dropped_tail == []
+    assert draft.length_violations == [
+        LengthViolation(issue=LengthIssue.PART_TOO_LONG, part=1, actual=len(text), limit=280)
+    ]
+
+
+async def test_tail_drop_is_skipped_when_the_disputed_number_is_only_in_the_tail() -> None:
+    text = f"{FITTING_HEAD}\n\n{OVERLONG_TAIL} По другим данным, 150 000."
+    fake = ScriptedLLMClient(*(single(text, "F1") for _ in range(3)))
+
+    draft = await write(fake, limits=DROP_LIMITS)
+
+    assert draft.texts == [text]
+    assert draft.dropped_tail == []
+
+
+async def test_tail_drop_leaves_the_post_whole_when_the_first_sentence_is_too_long() -> None:
+    text = "Начало " + "очень " * 50 + "длинного предложения. Второе."
+    fake = ScriptedLLMClient(*(single(text, "F1") for _ in range(3)))
+
+    draft = await write(fake, limits=DROP_LIMITS)
+
+    assert draft.texts == [text]
+    assert draft.dropped_tail == []
+    assert draft.length_violations
+
+
+async def test_tail_drop_never_applies_to_a_thread() -> None:
+    fake = ScriptedLLMClient(thread("Первый.", "б" * 300), thread("Первый.", "б" * 300))
+
+    draft = await write(fake, PostFormat.THREAD, DROP_LIMITS)
+
+    assert len(fake.calls) == 2
+    assert draft.dropped_tail == []
+    assert draft.texts == ["Первый.", "б" * 300]
+    assert "part 2: 300 characters, the limit is 280" in fake.calls[1][0][-1].content
+
+
+async def test_tail_drop_never_applies_to_a_long_post() -> None:
+    text = f"{FITTING_HEAD}\n\n{OVERLONG_TAIL}"
+    fake = ScriptedLLMClient(single(text, "F1"), single(text, "F1"))
+
+    draft = await write(
+        fake, PostFormat.LONG, make_limits(long_max_chars=280, short_drop_tail=True)
+    )
+
+    assert len(fake.calls) == 2
+    assert draft.texts == [text]
+    assert draft.dropped_tail == []
+
+
+@pytest.mark.parametrize("post_format", [PostFormat.LONG, PostFormat.THREAD])
+async def test_thread_and_long_prompts_keep_every_fact(post_format: PostFormat) -> None:
+    reply = thread("Первый.", "Второй.") if post_format is PostFormat.THREAD else single("Т.", "F1")
+    fake = ScriptedLLMClient(reply)
+
+    await write(fake, post_format, make_limits(short_max_facts=1))
+
+    prompt = user_text(fake.calls[0][0])
+    for text in (DATE_TEXT, WINNER_TEXT, PLACE_TEXT, ARMY_60_TEXT, ARMY_150_TEXT):
+        assert text in prompt
+    assert "sentences, each sentence" not in system_text(fake.calls[0][0])
+
+
+def test_a_draft_without_a_dropped_tail_defaults_to_an_empty_list() -> None:
+    draft = Draft(
+        post_format=PostFormat.SHORT,
+        parts=[DraftPart(text="Один.")],
+        used_fact_ids=[],
+        unverified_numbers=[],
+        length_violations=[],
+        attempts=1,
+    )
+
+    assert draft.dropped_tail == []
+    assert Draft.model_validate(draft.model_dump(exclude={"dropped_tail"})) == draft

@@ -52,7 +52,12 @@ closed. A decision on an open question is recorded here in the same change that 
 | An unverified number in a post is a warning, not a regeneration | The author sees it next to the post. See "Matching numbers and dates" below |
 | One writing method for every button      | Angle and revision are optional inputs of `write_draft`; a button re-enters step 4 without new code paths |
 | The writer replies in JSON, fact ids first | `complete_json` validates the reply. Ids first make the model pick facts before it writes; the text is the last field |
-| Length: one retry with the exact problems, then deliver marked | See "Length limits" below |
+| Length: one retry with the exact problems, then deliver marked | See "Length limits" below. For `long` and `thread`; a short post has its own rules, see "Short post length" |
+| A short post is written from at most `SHORT_MAX_FACTS` (3) facts picked by code | The model was asked to fit 6 to 10 facts into room for 2 or 3 and used 6 to 8. See "Short post length" below |
+| Short selection: `confirmed` before `single`, `FactSet` order, a dispute only whole | Code, no LLM. The extraction order puts core facts first; fact length would favour side details. Half a dispute would state one version as established |
+| Short budget in sentences derived from the limit, not "aim below" | A model does not count characters. `SHORT_MAX_CHARS // SHORT_SENTENCE_CHARS` sentences of up to `SHORT_SENTENCE_CHARS` characters |
+| Short retry quotes the sentences to cut and the excess, up to 2 retries | "Shorten it" made the model rewrite and sometimes grow the text. `SHORT_LENGTH_RETRIES`; `long` and `thread` keep one retry |
+| Tail drop of a short post exists but is off by default | See "Short post length" below |
 | Style rule data in `app/config/style.py`, one source | The writing prompt renders its rules from it and the style filter reads it. Not an env variable: a phrase contains a comma |
 | Writing prompt: English structure, Russian style rules | Matches the other prompts. The rules block is in Russian with the phrases it bans. A fully Russian prompt is to be tried if the voice reads wooden |
 | Voice rules 13-16 and the opinion cap from the first live drafts | See "Voice rules from live drafts" below |
@@ -85,9 +90,48 @@ two samples per topic and format, before and after, no examples in both:
 - Not improved: threads are still mostly one fact per tweet, now without the closer, and the text
   reads drier, closer to the facts' own wording. Zero opinions may be an over-correction. Short
   posts went over 280 characters after the retry in 2 of 4 samples before and 3 of 4 after; that
-  is a separate problem.
+  is a separate problem, addressed in HIS-22 (see "Short post length").
 
 Two samples per cell are noise-level evidence. The voice is still meant to come from the examples.
+
+### Short post length
+
+Measured in HIS-21: a short post broke `SHORT_MAX_CHARS` (280) after its one retry in 5 of 8
+samples, a retry once grew the text to 538 characters, and the first attempt never fit. The author
+examples did not help (319, 229, 469, 343 characters). The model got every fact of the set, 8 to
+10, and used 6 to 8 of them; "aim well below the limit" did nothing, since a model cannot count
+characters.
+
+HIS-22 chose two code mechanisms and one prompt change:
+
+- **Fact selection before the call** is the main lever: `SHORT_MAX_FACTS` (3) facts, picked by the
+  rules in [pipeline.md](pipeline.md), step 4. Three facts retold take 110 to 270 characters.
+- **A retry that names what to cut**: the length, the excess and the quoted longest sentences,
+  up to `SHORT_LENGTH_RETRIES` (2) times.
+- **A sentence budget** in the format rule replaces "aim well below the limit".
+
+**Tail drop is off by default** (`SHORT_DROP_TAIL=false`), the author's decision. Dropping the
+tail loses information, makes `used_fact_ids` inexact (it still lists facts that were in the
+dropped part) and can cut off the second half of a dispute. The mechanism stays behind the flag.
+Even when it is on, it is not applied to a post that contains a number of any disputed fact; such
+a post stays whole with `length_violations`. The check is by number only: a dispute stated without
+digits is not detected, and a number that a disputed fact shares with another fact also blocks the
+drop. The second error is the safe one.
+
+Measured with `tests/test_generator_live.py`, DeepSeek, default settings, the Kulikovo and Apollo
+11 fact sets:
+
+- No examples, 3 samples per topic: all 6 fit. Lengths 178, 169, 109 (Kulikovo) and 238, 231, 189
+  (Apollo 11). 5 fit at the first attempt, 1 after one retry; no second retry, no drop.
+- With the author examples, 2 samples per topic: all 4 fit at the first attempt. Lengths 179, 164
+  and 259, 273.
+- Threads, 2 samples per topic with and without examples, were unchanged in behaviour and all fit.
+
+Cost of the fix: the selection takes the first facts, which for Kulikovo are the date, the place
+and the commander. The posts fit but read like an encyclopedia entry: the duel of Peresvet, the
+nickname Донской and Ягайло's delay never reach a short post. Six and four samples are noise-level
+evidence. Open: whether the selection should favour a hook over the core facts (an LLM choice, or
+another selection for "другой заход").
 
 ### Wikipedia extracts
 
@@ -232,8 +276,11 @@ Decided as config values (HIS-6), defaults to be revisited after real drafts:
   at meaning boundaries; a tweet is never cut mid-sentence by code.
 - Counting is `len()` of the part as delivered. X counts a URL as 23 characters and emoji and CJK
   as 2, after NFC; for Russian text without links and emoji the counts match.
-- On a breach the model gets one retry with the exact parts and numbers. If it still breaks a
-  limit, the draft is delivered with `length_violations`; code never truncates.
+- On a breach of a `long` post or a thread the model gets one retry with the exact parts and
+  numbers. If it still breaks a limit, the draft is delivered with `length_violations`; code never
+  truncates these formats.
+- A short post: fact selection, a sentence budget, up to 2 retries that quote the sentences to
+  cut, and an optional tail drop that is off by default (HIS-22, see "Short post length").
 - Numbering (`1/ `) is off by default (`THREAD_NUMBERING`). Code adds it after the reply, the
   model is given a tweet limit reduced by the widest prefix, and the full length is checked.
 - Open: how many facts a thread needs (see [pipeline.md](pipeline.md), failure behaviour).

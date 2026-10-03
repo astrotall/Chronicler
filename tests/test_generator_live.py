@@ -21,7 +21,8 @@ KEYS = LiveKeys()
 OUTPUT_DIR = Path("data/comparisons")
 OUTPUT_TEMPLATE = "generator_live_{slug}.json"
 EXAMPLES_OUTPUT_TEMPLATE = "generator_live_examples_{slug}.json"
-SAMPLES = 2
+SAMPLES: dict[PostFormat, int] = {PostFormat.SHORT: 3, PostFormat.THREAD: 2}
+EXAMPLES_SAMPLES: dict[PostFormat, int] = {PostFormat.SHORT: 2, PostFormat.THREAD: 2}
 NO_EXAMPLES: tuple[str, ...] = ()
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,8 @@ def check_structure(draft: Draft, fact_set: FactSet, limits: WritingLimits) -> N
     assert set(draft.used_fact_ids) <= known
     limit = limits.part_max_chars(draft.post_format)
     assert all(len(rendered) <= limit for rendered in draft.rendered)
+    assert draft.length_violations == []
+    assert draft.dropped_tail == []
 
 
 def system_message_counts(client: RecordingLLMClient) -> set[int]:
@@ -218,15 +221,19 @@ def system_message_counts(client: RecordingLLMClient) -> set[int]:
 
 
 async def write_samples(
-    settings: Settings, fact_set: FactSet, limits: WritingLimits, examples: Sequence[str]
+    settings: Settings,
+    fact_set: FactSet,
+    limits: WritingLimits,
+    examples: Sequence[str],
+    samples: dict[PostFormat, int],
 ) -> tuple[RecordingLLMClient, list[Draft]]:
     drafts: list[Draft] = []
     async with build_http_client(settings) as http_client:
         client = RecordingLLMClient(
             LLMClientFactory(settings, http_client).get_client(LLMStep.WRITING)
         )
-        for post_format in (PostFormat.SHORT, PostFormat.THREAD):
-            for _ in range(SAMPLES):
+        for post_format, count in samples.items():
+            for _ in range(count):
                 drafts.append(
                     await write_draft(as_client(client), fact_set, post_format, limits, examples)
                 )
@@ -246,13 +253,16 @@ def save_drafts(path: Path, drafts: list[Draft]) -> None:
 
 def log_draft(draft: Draft) -> None:
     logger.info(
-        "live draft format=%s parts=%d used=%s unverified=%d violations=%d attempts=%d",
+        "live draft format=%s parts=%d chars=%s used=%s unverified=%d violations=%d "
+        "attempts=%d dropped_tail=%d",
         draft.post_format,
         len(draft.parts),
+        [len(rendered) for rendered in draft.rendered],
         draft.used_fact_ids,
         len(draft.unverified_numbers),
         len(draft.length_violations),
         draft.attempts,
+        len(draft.dropped_tail),
     )
 
 
@@ -262,7 +272,8 @@ def log_draft(draft: Draft) -> None:
 async def test_live_writing_of_a_short_post_and_a_thread(case: LiveCase) -> None:
     settings = live_settings()
     limits = WritingLimits.from_settings(settings)
-    client, drafts = await write_samples(settings, case.fact_set, limits, NO_EXAMPLES)
+    assert not limits.short_drop_tail
+    client, drafts = await write_samples(settings, case.fact_set, limits, NO_EXAMPLES, SAMPLES)
 
     save_drafts(OUTPUT_DIR / OUTPUT_TEMPLATE.format(slug=case.slug), drafts)
     assert system_message_counts(client) == {1}
@@ -280,7 +291,10 @@ async def test_live_writing_with_the_author_examples(case: LiveCase) -> None:
     if not examples:
         pytest.skip(f"no examples in {settings.examples_dir}")
     limits = WritingLimits.from_settings(settings)
-    client, drafts = await write_samples(settings, case.fact_set, limits, examples)
+    assert not limits.short_drop_tail
+    client, drafts = await write_samples(
+        settings, case.fact_set, limits, examples, EXAMPLES_SAMPLES
+    )
 
     save_drafts(OUTPUT_DIR / EXAMPLES_OUTPUT_TEMPLATE.format(slug=case.slug), drafts)
     assert system_message_counts(client) == {2}

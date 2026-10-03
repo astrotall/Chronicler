@@ -165,6 +165,20 @@ job. An empty `FactSet` is a `ValueError` before any call.
   A number taken from the topic is not among the facts and is reported like any other.
 - **What the model sees of a fact:** its id (`F1`...), its text and its status. Never the quotes
   or the URLs: the post is written in the model's own words, not copied from a source.
+- **A short post gets a selection of the facts.** Before the call, code picks at most
+  `SHORT_MAX_FACTS` (3) facts for `short` (`select_short_facts`, `app/services/short_post.py`);
+  `long` and `thread` get the whole `FactSet`. The rules:
+  1. Facts that are not disputed, `confirmed` first, then `single`, in `FactSet` order inside each
+     status. Step 3 already keeps the extraction model's order, which tends to open with the core
+     facts. The length of a fact's text is not used: short facts are mostly side details.
+  2. A dispute enters only whole and only if it fits into the slots left. Overlapping disputes
+     merge into one unit; disputed facts with no group form one unit. With the default limit and 3
+     or more facts to state, a short post gets no dispute.
+  3. If no fact to state was picked and no unit fits, the first unit is taken whole, over the
+     limit: a dispute is never given half.
+  The prompt gets only the selection; the `FactSet` itself does not change, so the author still
+  sees every fact and every dispute. `used_fact_ids` and the number check still use the whole
+  `FactSet`. A consequence: every angle ("другой заход") of a short post gets the same facts.
 - **Disputed facts are a separate block.** A fact is disputed if its status is `disputed` or it
   belongs to a `Dispute`. Such facts are shown only under the disputed header, grouped by
   dispute with its explanation, and never in the block of facts to state. The prompt asks for
@@ -180,10 +194,32 @@ job. An empty `FactSet` is a `ValueError` before any call.
   case ignored); unknown ids are dropped and counted, repeated ones are kept once.
 - **Length.** Code counts `len()` of each part as delivered, numbering included. Limits:
   `SHORT_MAX_CHARS` (280), `LONG_MAX_CHARS` (25000), `THREAD_TWEET_MAX_CHARS` (280) per tweet and
-  `THREAD_MAX_TWEETS` (12). If a part is too long or a thread has too many tweets, the model gets
-  its reply back with a list of exactly which parts break which limit, once
-  (`WRITING_LENGTH_RETRIES`). If the second reply still breaks a limit, the `Draft` is returned
-  with `length_violations`. Code never cuts text.
+  `THREAD_MAX_TWEETS` (12). If a part of a `long` post or a thread is too long or a thread has too
+  many tweets, the model gets its reply back with a list of exactly which parts break which limit,
+  once (`WRITING_LENGTH_RETRIES`). If the second reply still breaks a limit, the `Draft` is
+  returned with `length_violations`. Code never cuts a `long` post or a thread.
+- **Short post budget.** The format rule gives a budget derived from the limit instead of "aim
+  below it": at most `SHORT_MAX_CHARS // SHORT_SENTENCE_CHARS` sentences (3 by default), each at
+  most `SHORT_SENTENCE_CHARS` (80) characters, and the total. A model counts sentences better than
+  characters.
+- **Short post retry.** An overlong short post gets up to `SHORT_LENGTH_RETRIES` (2) retries. The
+  correction states the length, the limit and the excess, and quotes the sentences to delete or
+  shorten: the longest ones, until their total covers the excess. After the last retry the draft
+  is returned with `length_violations`, as for the other formats.
+- **Tail drop, off by default** (`SHORT_DROP_TAIL=false`). When on, a short post still over the
+  limit after every retry loses its tail, by code: the longest run of whole leading paragraphs that
+  fits is kept; if even the first paragraph is over, its trailing sentences go; if even the first
+  sentence is over, nothing is dropped. The dropped pieces are listed in `Draft.dropped_tail` and
+  `length_violations` is recomputed on the kept text. It is never applied when the post contains a
+  number of any disputed fact (`extract_numbers`), because the drop could leave one version of a
+  dispute without the other; the draft then stays whole with `length_violations`.
+  `used_fact_ids` stays what the model reported for the full text, so after a drop it may name
+  facts that are no longer in the post; the bot has to say so next to a non-empty `dropped_tail`.
+- **Sentence boundaries** (for the retry and the drop): `.`, `!`, `?` or `…`, optional closing
+  quotes, whitespace, then an uppercase letter, a digit or an opening quote. A point after a
+  one-letter word (initials, `г.`) or after a word in `SENTENCE_ABBREVIATIONS` is not a boundary.
+  The rule errs towards joining two sentences, never towards cutting one; a paragraph boundary is
+  a blank line.
 - **Thread numbering** (`THREAD_NUMBERING`, off by default) is added by code after the reply, as
   a `prefix` of each part (`1/ `). The model is told a tweet limit reduced by the widest prefix;
   code checks the full length. The prefix is not part of `text`, so the number check and the
@@ -194,8 +230,8 @@ job. An empty `FactSet` is a `ValueError` before any call.
   `Draft.unverified_numbers`. This is a warning shown to the author, not a rejection and not a
   regeneration; whether step 5 folds it into its regeneration loop is decided there.
 - An LLM error or an invalid reply is not caught. One INFO line logs the format and counters:
-  parts, used facts, unknown ids, unverified numbers, length violations, attempts. Texts are never
-  logged.
+  parts, facts offered to the model, used facts, unknown ids, unverified numbers, length
+  violations, attempts, dropped pieces. Texts are never logged.
 
 Known limits of the number check:
 
@@ -262,8 +298,9 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `PostFormat`        | `short`, `long`, `thread`                                                                                 |
 | `DraftPart`         | One part of a post: `text` as the model wrote it and a `prefix` added by code (numbering); `rendered` is the two joined |
 | `LengthViolation`   | `issue` (`part_too_long` or `too_many_parts`), the 1-based `part` or none, `actual` and `limit`            |
+| `SentenceBudget`    | `max_sentences` and `sentence_chars` of a short post, derived from `SHORT_MAX_CHARS` and `SHORT_SENTENCE_CHARS` |
 | `Revision`          | `instruction` and `previous` (the texts of the previous draft's parts), for "короче" and "ещё вариант"    |
-| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the author copies |
+| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the author copies |
 
 ### Fact status
 
