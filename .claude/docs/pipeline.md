@@ -214,6 +214,24 @@ job. An empty `FactSet` is a `ValueError` before any call.
   many tweets, the model gets its reply back with a list of exactly which parts break which limit,
   once (`WRITING_LENGTH_RETRIES`). If the second reply still breaks a limit, the `Draft` is
   returned with `length_violations`. Code never cuts a `long` post or a thread.
+- **Long post minimum (HIS-30).** `long` has a floor as well as a ceiling: `LONG_MIN_CHARS`
+  (1200, about 3 paragraphs of 400) and `LONG_MIN_USED_FACTS` (6). The facts minimum is capped by
+  the number of facts that can be stated in the prompt (not disputed), so a small set is never
+  asked for the impossible. `LONG_MAX_CHARS` stays a ceiling, not a target. The format rule gives
+  numbers derived from the settings, like the short budget: at least `max(2, min // 400)`
+  paragraphs, "usually `min` to 2 x `min` characters" (`LONG_TYPICAL_SIZE_MULTIPLIER`) so the model
+  does not sit exactly on the floor, never fewer than `min`, develop at least N facts, and do not
+  shrink the post to a summary. With both minimums at 0 the old open rule is used.
+  A draft under the floor is a length problem and goes through the same retry as an overlong one
+  (`WRITING_LENGTH_RETRIES`, one retry for `long`). The correction states the characters and the
+  facts used against the minimums, asks to expand the text using more of the facts, and lists the
+  ids of the facts that can be stated and are not used yet (ids only, never texts). If the second
+  reply is still under the floor, the `Draft` is returned with `LengthIssue.TOO_SHORT`
+  (characters, part 1) and/or `LengthIssue.TOO_FEW_FACTS` (used facts), and the bot warns. The
+  post is never lost. The minimum applies to `long` only; `short` and `thread` are unchanged.
+  The fact count is `used_fact_ids` as step 4 builds it, so it relies on the ids the model
+  reported (plus the disputed facts that code finds); only the character count is checked by
+  code against the text.
 - **Short post budget.** The format rule gives a budget derived from the limit instead of "aim
   below it": at most `SHORT_MAX_CHARS // SHORT_SENTENCE_CHARS` sentences (3 by default), each at
   most `SHORT_SENTENCE_CHARS` (80) characters, and the total. A model counts sentences better than
@@ -367,7 +385,23 @@ No dependency. Each phrase becomes a regular expression:
    It is reported, counts when the best version is chosen, and is in the instruction when a
    regeneration happens for another reason.
 5. With no violation there is no extra call: one critic call and no writer call.
-6. **The best version goes out:** the fewest violations of the rules in `DANGEROUS_STYLE_RULES`
+6. **A regression is rejected (HIS-30).** A new version is compared with the last accepted one:
+   the total characters of its parts (numbering excluded) and `len(used_fact_ids)`. It is a
+   regression if it keeps less than `STYLE_MIN_RETAINED_CHARS_RATIO` (0.6) of the characters and
+   has lost more than `STYLE_REGRESSION_FREE_CHARS` (100), or keeps less than
+   `STYLE_MIN_RETAINED_FACTS_RATIO` (0.6) of the used facts and has lost more than
+   `STYLE_REGRESSION_FREE_FACTS` (1). The allowance is for a short post: removing one flagged
+   sentence (under 100 characters, one fact) is a legitimate shortening, never a regression. A
+   previous version with no used facts has no fact regression. A regression is not evaluated (no
+   critic call), never enters the candidates and never becomes "the previous version" of the next
+   attempt; it is counted in `StyleResult.regressions_rejected`. It uses one regeneration of the
+   budget. The next attempt starts from the same last accepted version and the same violation list
+   and adds "The previous attempt removed too much: keep all the text and all the facts, and change
+   only the flagged fragments". If the budget is used up, the best accepted version goes out (at
+   worst the original) with its remaining violations; the bot says how many were rejected.
+   The regeneration instruction itself says: fix only the flagged fragments, the rest stays word
+   for word, the same length, the same facts.
+7. **The best version goes out:** the fewest violations of the rules in `DANGEROUS_STYLE_RULES`
    (`unsupported_claim`, `unverified_number`, `ambiguous_reference`, `invented_experience`, data in
    `app/config/style.py`), then the fewest violations in total, and on a tie the later one. Its
    remaining violations are in `StyleResult.report`; nothing is hidden.
@@ -387,9 +421,12 @@ costs up to 2 extra writer calls.
   `regeneration_failed` is set, and the best of the versions already evaluated goes out with its
   violations.
 - One INFO line per review: format, attempts, chosen attempt, regenerations, whether a
-  regeneration failed, the critic status of each attempt, the number of violations, dangerous ones,
+  regeneration failed, the number of rejected regressions, the critic status of each attempt, the number of violations, dangerous ones,
   counts per rule name, and the dropped, withdrawn and over-limit findings. Texts, excerpts and
   explanations are never logged.
+
+A rejected regression costs one `write_draft` call and no critic call, and counts in the same
+limit `STYLE_MAX_REGENERATIONS`.
 
 Worst case per post: 3 critic calls and 2 `write_draft` calls, each of which may make up to 3 writer
 calls for a short post (the length retries).
@@ -436,7 +473,9 @@ In this order:
    among the facts (`unverified_numbers`), length violations with the numbers, the remaining style
    violations (rule, excerpt, tweet, explanation; `length` and `unverified_number` are shown by the
    first two lines and not repeated), the critic did not check the text (`critic = failed`), a
-   regeneration failed and the best version is shown, and a non-empty `dropped_tail` with the
+   regeneration failed and the best version is shown, regressions rejected (a count and the
+   reason, never the rejected text), a draft under the long minimum (characters or facts against
+   the minimum, from the `length` lines), and a non-empty `dropped_tail` with the
    dropped text and a note that `used_fact_ids` may be inexact.
 3. **Facts**, HTML with every text escaped. Each fact: id, status ("подтверждён: разные домены",
    "один источник" or "СПОРНО"), text, and a link per source url labelled with its host. A
@@ -528,11 +567,11 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `LengthViolation`   | `issue` (`part_too_long` or `too_many_parts`), the 1-based `part` or none, `actual` and `limit`            |
 | `SentenceBudget`    | `max_sentences` and `sentence_chars` of a short post, derived from `SHORT_MAX_CHARS` and `SHORT_SENTENCE_CHARS` |
 | `Revision`          | `instruction` and `previous` (the texts of the previous draft's parts), for "короче" and "ещё вариант"    |
-| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the author copies |
+| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `length_violations` also holds `too_short` and `too_few_facts` for a long post under its minimum. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the author copies |
 | `StyleRule`         | The rules a violation names: `dash`, `banned_phrase`, `invented_experience`, `emoji`, `hashtag`, `closing_question`, `length`, `unverified_number` (code) and `cliche`, `triplet`, `filler`, `opinion`, `unsupported_claim`, `ambiguous_reference` (critic; `invented_experience` too) |
 | `Violation`         | `rule`, `source` (`code` or `critic`), `part` (1-based or none), `excerpt` (from the text, none for length), `explanation` in Russian for the author |
 | `StyleReport`       | `violations`, `critic` (`checked`, `disabled`, `failed`), counters of critic findings dropped (excerpt not in the text), withdrawn and over the limit; `passed` is no violations |
-| `StyleResult`       | The `draft` that goes out, its `report`, `attempts` (versions evaluated), `chosen_attempt`, `regenerations` and `regeneration_failed` |
+| `StyleResult`       | The `draft` that goes out, its `report`, `attempts` (versions evaluated), `chosen_attempt`, `regenerations`, `regeneration_failed` and `regressions_rejected` (regenerations the loop rejected as too destructive) |
 | `PipelineStage`     | `planning`, `research`, `facts`, `writing`, `style`: what the progress message shows and what a failure names |
 | `PostAction`        | The buttons: `shorter`, `thread`, `angle`, `variant`                                                      |
 | `FailureKind`       | The class of an `LLMError` for the author: `config`, `auth`, `request`, `rate_limit`, `unavailable`, `invalid_response`, `other` |

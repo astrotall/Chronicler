@@ -29,6 +29,8 @@ class DraftPart(BaseModel):
 class LengthIssue(StrEnum):
     PART_TOO_LONG = "part_too_long"
     TOO_MANY_PARTS = "too_many_parts"
+    TOO_SHORT = "too_short"
+    TOO_FEW_FACTS = "too_few_facts"
 
 
 class LengthViolation(BaseModel):
@@ -45,6 +47,13 @@ class SentenceBudget(BaseModel):
 
     max_sentences: int = Field(ge=1)
     sentence_chars: int = Field(ge=1)
+
+
+class LongSize(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    min_chars: int = Field(ge=0)
+    min_facts: int = Field(ge=0)
 
 
 class Revision(BaseModel):

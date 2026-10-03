@@ -73,6 +73,7 @@ closed. A decision on an open question is recorded here in the same change that 
 | The critic quotes an excerpt, and code checks it occurs in the post | The critic can invent a problem in a sentence the post does not have |
 | A critic finding has a verdict after the explanation | The same device as for contradictions: the model reasons first and can withdraw a finding |
 | A critic or regeneration failure never loses the post | The deterministic checks already ran; the post goes out flagged (`critic = failed`, `regeneration_failed`) instead of the bot failing |
+| A regeneration that keeps too little of the text or the facts is rejected, never chosen | HIS-30: the filter compared violations, so a one-sentence version with no violations won. See "Long post size and the regression guard" |
 | A length violation alone does not regenerate | Step 4 already spent its retries on it. The author's decision |
 | The best version: fewest dangerous violations, then fewest in total, the later on a tie | An unsupported claim is worse than a cliche. The dangerous rules are data, `DANGEROUS_STYLE_RULES` |
 | Hook, rhythm and thread structure are not checked | Subjective; a critic verdict on them would drive regenerations by taste. Prompt and few-shot only. The author's decision |
@@ -229,13 +230,54 @@ Known gaps, accepted:
 - A critic finding can be wrong; it still regenerates. Its excerpt must exist in the post, which
   stops invented findings, not wrong judgements. One finding may be reported under two rules
   (`unsupported_claim` and `filler` for one sentence) and then counts twice.
-- A regeneration may drop content to fix a problem; the filter compares violations, not how much
-  of the facts the post keeps.
+- Closed in HIS-30: a regeneration that drops content to fix a problem is now rejected (see "Long
+  post size and the regression guard"). What stays open: the guard measures characters and the
+  facts the model reports, not meaning, so a version that keeps its size but swaps the facts it
+  states is not seen.
 - A closing question inside a closing quote is not flagged; a final `?` of a quoted question
   without a closing quote is.
 - `EMOJI_RANGES` is a list of blocks, not the full emoji definition; dingbats such as ✓ count as
   emoji.
 - Hook, rhythm and thread structure are not checked at all.
+
+### Long post size and the regression guard
+
+The first manual run in Telegram (HIS-30): "лонг: Как выглядел обычный день советского человека в
+1930-е" returned one sentence. The first long draft was already tiny (offered 20 facts, used 8,
+124 output tokens: the format had no minimum and said "as long as the facts deserve"). The critic
+found problems, the regeneration returned 38 tokens with 1 fact, the critic found nothing in it,
+and it won the choice of the best version with 0 violations. The filter compared the number of
+violations, not what was left of the text.
+
+Decided:
+
+- **A floor for `long`:** `LONG_MIN_CHARS` 1200 and `LONG_MIN_USED_FACTS` 6. A paragraph in
+  Russian is 300 to 450 characters, so 1200 is about 3 paragraphs: "several paragraphs, not pages".
+  6 used facts is 30% of a typical 20-fact set. The facts minimum is capped by the facts that can
+  be stated, so a small set is not asked for the impossible. `LONG_MAX_CHARS` (25000) stays a
+  ceiling. The prompt says "usually 1200 to 2400" (`LONG_TYPICAL_SIZE_MULTIPLIER` 2) so the model
+  does not land exactly on the floor.
+- **Under the floor is a length problem:** the existing length retry (`WRITING_LENGTH_RETRIES`, 1),
+  a correction with the size, the minimum and the ids of the unused facts, then `Draft` with
+  `LengthIssue.TOO_SHORT` and/or `TOO_FEW_FACTS`. Two kinds, because characters and facts are
+  different units and the bot has to name which is missing. The violation is report-only in the
+  style loop, like every length violation.
+- **A regression guard for every format:** a regeneration that keeps less than 0.6 of the
+  characters or of the used facts of the last accepted version is rejected, with an allowance for
+  a short post (up to 100 characters and 1 fact may go). Without the allowance a short post that
+  loses one flagged sentence of 80 characters (2 facts to 1 is a ratio of 0.5) would be rejected
+  as a regression. The values 0.6 and the allowance were chosen by the implementer, not measured.
+- **Known limits:** the fact count relies on the ids the model reports (code adds only the
+  disputed facts it can find by numbers); a version that keeps its size and swaps facts passes; a
+  rejected regression spends one regeneration of the budget, so with the default 2 a long post
+  gets at most one more try after it.
+
+Live check, DeepSeek, long format, two hand-made 18-fact sets (not from sources), 3 samples each,
+the whole write and style loop, 18 requests: all 6 posts were 1330 to 1719 characters and used 16
+to 18 facts. The minimum retry and the regression guard were not triggered by a single sample, so
+the live run shows only that the new prompt does not collapse; the two mechanisms are covered by
+unit tests. The posts read as the facts retold one after another, grouped into paragraphs, not as
+a narrative.
 
 ### Bot delivery
 
@@ -438,6 +480,8 @@ Decided as config values (HIS-6), defaults to be revisited after real drafts:
 
 - Short post: `SHORT_MAX_CHARS`, 280.
 - Long post: `LONG_MAX_CHARS`, 25000 (X Premium).
+- Long post minimum: `LONG_MIN_CHARS` 1200 and `LONG_MIN_USED_FACTS` 6, a floor with one retry
+  (HIS-30, see "Long post size and the regression guard").
 - Thread: `THREAD_TWEET_MAX_CHARS`, 280 per tweet, and `THREAD_MAX_TWEETS`, 12. The model splits
   at meaning boundaries; a tweet is never cut mid-sentence by code.
 - Counting is `len()` of the part as delivered. X counts a URL as 23 characters and emoji and CJK

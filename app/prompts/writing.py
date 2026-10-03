@@ -1,7 +1,19 @@
 from collections.abc import Sequence
 
-from app.config.constants import THREAD_MIN_TWEETS
-from app.domain.draft import LengthIssue, LengthViolation, PostFormat, Revision, SentenceBudget
+from app.config.constants import (
+    LONG_MIN_PARAGRAPHS,
+    LONG_PARAGRAPH_CHARS,
+    LONG_TYPICAL_SIZE_MULTIPLIER,
+    THREAD_MIN_TWEETS,
+)
+from app.domain.draft import (
+    LengthIssue,
+    LengthViolation,
+    LongSize,
+    PostFormat,
+    Revision,
+    SentenceBudget,
+)
 from app.domain.fact import Fact, FactSet, FactStatus
 from app.domain.llm import Message, Role
 from app.prompts.style_rules import render_style_rules
@@ -40,6 +52,20 @@ LONG_FORMAT_RULE = (
     "Format: one long post in the field text, at most {max_chars} characters including "
     "spaces. Make it as long as the facts deserve and do not pad it."
 )
+LONG_SIZED_FORMAT_RULE = (
+    "Format: one long post in the field text, several paragraphs separated by a blank line."
+    "{size} The limit of {max_chars} characters including spaces is a ceiling, not a target. "
+    "Do not pad the text, and do not shrink it to a summary of a few lines."
+)
+LONG_MIN_CHARS_CLAUSE = (
+    " Write at least {min_paragraphs} paragraphs, usually {min_chars} to {typical_chars} "
+    "characters, never fewer than {min_chars}."
+)
+LONG_MIN_FACTS_CLAUSE = (
+    " Develop at least {min_facts} of the facts you may state, each in its own sentences, "
+    "not as a list."
+)
+NO_LONG_SIZE = LongSize(min_chars=0, min_facts=0)
 THREAD_FORMAT_RULE = (
     "Format: a thread of {min_tweets} to {max_tweets} tweets in the field tweets. Split at "
     "meaning boundaries, never in the middle of a sentence. A tweet may be one short "
@@ -77,6 +103,16 @@ LENGTH_CORRECTION_TEMPLATE = (
 )
 PART_TOO_LONG_LINE = "- part {part}: {actual} characters, the limit is {limit}"
 TOO_MANY_PARTS_LINE = "- {actual} tweets, the maximum is {limit}"
+EXPAND_CORRECTION_TEMPLATE = (
+    "The post is too short:\n{problems}\n"
+    "Rewrite it as a developed post: expand the text and use more of the facts you may "
+    "state.{unused} Retell each fact in your own words. Do not pad the text, and do not add "
+    "anything that no fact states. Reply with the same json shape."
+)
+TOO_SHORT_LINE = "- {actual} characters, the minimum is {limit}"
+TOO_FEW_FACTS_LINE = "- {actual} facts used, the minimum is {limit}"
+UNUSED_FACTS_CLAUSE = " Facts not used yet: {ids}."
+ID_LIST_SEPARATOR = ", "
 SHORT_CORRECTION_TEMPLATE = (
     "The post has {actual} characters, {excess} over the limit of {limit}. Delete these "
     "sentences, or shorten them by at least {excess} characters in total:\n{sentences}\n"
@@ -86,8 +122,27 @@ SHORT_CORRECTION_TEMPLATE = (
 NAMED_SENTENCE_LINE = "- «{sentence}»"
 
 
+def long_rule(max_chars: int, long_size: LongSize) -> str:
+    if not long_size.min_chars and not long_size.min_facts:
+        return LONG_FORMAT_RULE.format(max_chars=max_chars)
+    size = ""
+    if long_size.min_chars:
+        size += LONG_MIN_CHARS_CLAUSE.format(
+            min_paragraphs=max(LONG_MIN_PARAGRAPHS, long_size.min_chars // LONG_PARAGRAPH_CHARS),
+            min_chars=long_size.min_chars,
+            typical_chars=long_size.min_chars * LONG_TYPICAL_SIZE_MULTIPLIER,
+        )
+    if long_size.min_facts:
+        size += LONG_MIN_FACTS_CLAUSE.format(min_facts=long_size.min_facts)
+    return LONG_SIZED_FORMAT_RULE.format(size=size, max_chars=max_chars)
+
+
 def format_rule(
-    post_format: PostFormat, max_chars: int, max_tweets: int, budget: SentenceBudget
+    post_format: PostFormat,
+    max_chars: int,
+    max_tweets: int,
+    budget: SentenceBudget,
+    long_size: LongSize,
 ) -> str:
     match post_format:
         case PostFormat.SHORT:
@@ -97,7 +152,7 @@ def format_rule(
                 max_chars=max_chars,
             )
         case PostFormat.LONG:
-            return LONG_FORMAT_RULE.format(max_chars=max_chars)
+            return long_rule(max_chars, long_size)
         case PostFormat.THREAD:
             return THREAD_FORMAT_RULE.format(
                 min_tweets=THREAD_MIN_TWEETS, max_tweets=max_tweets, max_chars=max_chars
@@ -161,6 +216,7 @@ def render_writing(
     max_chars: int,
     max_tweets: int,
     budget: SentenceBudget,
+    long_size: LongSize = NO_LONG_SIZE,
     examples: Sequence[str] = (),
     angle: str | None = None,
     revision: Revision | None = None,
@@ -182,7 +238,7 @@ def render_writing(
         Message(
             role=Role.SYSTEM,
             content=WRITING_SYSTEM_PROMPT.format(
-                format_rule=format_rule(post_format, max_chars, max_tweets, budget),
+                format_rule=format_rule(post_format, max_chars, max_tweets, budget, long_size),
                 style_rules=render_style_rules(),
             ),
         )
@@ -206,11 +262,30 @@ def violation_line(violation: LengthViolation) -> str:
             )
         case LengthIssue.TOO_MANY_PARTS:
             return TOO_MANY_PARTS_LINE.format(actual=violation.actual, limit=violation.limit)
+        case LengthIssue.TOO_SHORT:
+            return TOO_SHORT_LINE.format(actual=violation.actual, limit=violation.limit)
+        case LengthIssue.TOO_FEW_FACTS:
+            return TOO_FEW_FACTS_LINE.format(actual=violation.actual, limit=violation.limit)
 
 
 def render_length_correction(violations: Sequence[LengthViolation]) -> Message:
     problems = LINE_SEPARATOR.join(violation_line(violation) for violation in violations)
     return Message(role=Role.USER, content=LENGTH_CORRECTION_TEMPLATE.format(problems=problems))
+
+
+def render_expand_correction(
+    violations: Sequence[LengthViolation], unused_fact_ids: Sequence[str]
+) -> Message:
+    problems = LINE_SEPARATOR.join(violation_line(violation) for violation in violations)
+    unused = (
+        UNUSED_FACTS_CLAUSE.format(ids=ID_LIST_SEPARATOR.join(unused_fact_ids))
+        if unused_fact_ids
+        else ""
+    )
+    return Message(
+        role=Role.USER,
+        content=EXPAND_CORRECTION_TEMPLATE.format(problems=problems, unused=unused),
+    )
 
 
 def render_short_correction(

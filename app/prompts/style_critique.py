@@ -74,10 +74,10 @@ CRITIC_POST_BLOCK = "Post:\n{post}"
 CRITIC_THREAD_BLOCK = "Thread, each tweet starts with its number in square brackets:\n{post}"
 
 REVISION_TEMPLATE = (
-    "Fix only the problems listed below and keep everything else as it is: the same facts, "
-    "the same order, the same wording wherever there is no problem. Do not add facts or "
-    "claims. Where a sentence adds a meaning that no fact states, remove that meaning or the "
-    "sentence.\n"
+    "Fix only the flagged fragments below. The rest of the text stays word for word, the same "
+    "length, the same facts, the same order. Do not add facts or claims. Where a sentence "
+    "adds a meaning that no fact states, remove that meaning or the sentence, and nothing "
+    "else.\n"
     "Problems:\n{problems}"
 )
 FORBIDDEN_TEMPLATE = "\nDo not use these phrases or close variants of them: {phrases}."
@@ -96,6 +96,12 @@ HASHTAG_EXPLANATION = "Хештеги в посте запрещены."
 CLOSING_QUESTION_EXPLANATION = "Пост заканчивается вопросом к читателю."
 PART_TOO_LONG_EXPLANATION = "Часть {part}: {actual} знаков при пределе {limit}."
 TOO_MANY_PARTS_EXPLANATION = "{actual} твитов при максимуме {limit}."
+TOO_SHORT_EXPLANATION = "Пост короче минимума: {actual} знаков при минимуме {limit}."
+TOO_FEW_FACTS_EXPLANATION = "В посте {actual} фактов при минимуме {limit}."
+REGRESSION_NOTE = (
+    "\nThe previous attempt removed too much: keep all the text and all the facts, and change "
+    "only the flagged fragments."
+)
 UNVERIFIED_NUMBER_EXPLANATION = "Числа {number} нет ни в одном факте."
 
 
@@ -136,10 +142,14 @@ def problem_line(violation: Violation) -> str:
     )
 
 
-def render_style_revision(violations: Sequence[Violation], forbidden: Sequence[str]) -> str:
+def render_style_revision(
+    violations: Sequence[Violation], forbidden: Sequence[str], *, after_regression: bool = False
+) -> str:
     instruction = REVISION_TEMPLATE.format(
         problems=LINE_SEPARATOR.join(problem_line(violation) for violation in violations)
     )
     if forbidden:
         instruction += FORBIDDEN_TEMPLATE.format(phrases=quoted(forbidden, LIST_SEPARATOR))
+    if after_regression:
+        instruction += REGRESSION_NOTE
     return instruction

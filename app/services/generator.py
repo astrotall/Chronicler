@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Sequence
-from typing import Annotated, Self
+from typing import Annotated, NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -21,6 +21,7 @@ from app.domain.draft import (
     DraftPart,
     LengthIssue,
     LengthViolation,
+    LongSize,
     PostFormat,
     Revision,
     SentenceBudget,
@@ -28,7 +29,14 @@ from app.domain.draft import (
 from app.domain.fact import FactSet
 from app.domain.llm import Message, Role
 from app.llm.client import LLMClient
-from app.prompts.writing import render_length_correction, render_short_correction, render_writing
+from app.prompts.writing import (
+    NO_LONG_SIZE,
+    disputed_ids,
+    render_expand_correction,
+    render_length_correction,
+    render_short_correction,
+    render_writing,
+)
 from app.services.disputes import with_disputed_facts
 from app.services.facts import normalize_label
 from app.services.quote_check import extract_numbers
@@ -49,6 +57,9 @@ MAX_TOKENS: dict[PostFormat, int] = {
     PostFormat.LONG: WRITING_LONG_MAX_TOKENS,
     PostFormat.THREAD: WRITING_THREAD_MAX_TOKENS,
 }
+
+
+SIZE_ISSUES = frozenset({LengthIssue.TOO_SHORT, LengthIssue.TOO_FEW_FACTS})
 
 
 class SingleReply(BaseModel):
@@ -84,6 +95,14 @@ class WritingLimits(BaseModel):
     short_sentence_chars: int = Field(default=SHORT_DEFAULT_SENTENCE_CHARS, ge=1)
     short_length_retries: int = Field(default=SHORT_DEFAULT_LENGTH_RETRIES, ge=0)
     short_drop_tail: bool = False
+    long_min_chars: int = Field(default=0, ge=0)
+    long_min_used_facts: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def require_long_range(self) -> Self:
+        if self.long_min_chars > self.long_max_chars:
+            raise ValueError("the long minimum must not exceed the long limit")
+        return self
 
     @model_validator(mode="after")
     def require_room_for_numbering(self) -> Self:
@@ -103,6 +122,8 @@ class WritingLimits(BaseModel):
             short_sentence_chars=settings.short_sentence_chars,
             short_length_retries=settings.short_length_retries,
             short_drop_tail=settings.short_drop_tail,
+            long_min_chars=settings.long_min_chars,
+            long_min_used_facts=settings.long_min_used_facts,
         )
 
     def part_max_chars(self, post_format: PostFormat) -> int:
@@ -174,6 +195,46 @@ def check_length(
     return violations
 
 
+def long_size(post_format: PostFormat, limits: WritingLimits, prompt_facts: FactSet) -> LongSize:
+    if post_format is not PostFormat.LONG:
+        return NO_LONG_SIZE
+    disputed = disputed_ids(prompt_facts)
+    assertable = sum(1 for fact in prompt_facts.facts if fact.id not in disputed)
+    return LongSize(
+        min_chars=limits.long_min_chars,
+        min_facts=min(limits.long_min_used_facts, assertable),
+    )
+
+
+def check_size(
+    parts: Sequence[DraftPart], used_fact_ids: Sequence[str], size: LongSize
+) -> list[LengthViolation]:
+    violations: list[LengthViolation] = []
+    chars = sum(len(part.text) for part in parts)
+    if chars < size.min_chars:
+        violations.append(
+            LengthViolation(issue=LengthIssue.TOO_SHORT, part=1, actual=chars, limit=size.min_chars)
+        )
+    if len(used_fact_ids) < size.min_facts:
+        violations.append(
+            LengthViolation(
+                issue=LengthIssue.TOO_FEW_FACTS,
+                actual=len(used_fact_ids),
+                limit=size.min_facts,
+            )
+        )
+    return violations
+
+
+def unused_fact_ids(prompt_facts: FactSet, used_fact_ids: Sequence[str]) -> list[str]:
+    disputed = disputed_ids(prompt_facts)
+    return [
+        fact.id
+        for fact in prompt_facts.facts
+        if fact.id not in disputed and fact.id not in used_fact_ids
+    ]
+
+
 def text_violations(
     parts: Sequence[DraftPart], violations: Sequence[LengthViolation]
 ) -> list[LengthViolation]:
@@ -229,7 +290,10 @@ def length_correction(
     violations: Sequence[LengthViolation],
     post_format: PostFormat,
     limits: WritingLimits,
+    unused: Sequence[str],
 ) -> Message:
+    if any(violation.issue in SIZE_ISSUES for violation in violations):
+        return render_expand_correction(violations, unused)
     if post_format is not PostFormat.SHORT:
         return render_length_correction(text_violations(parts, violations))
     [violation] = violations
@@ -260,6 +324,29 @@ async def request_reply(
     return await client.complete_json(messages, SingleReply, max_tokens=max_tokens)
 
 
+class Assessment(NamedTuple):
+    parts: list[DraftPart]
+    reported: list[str]
+    used: list[str]
+    unknown: int
+    violations: list[LengthViolation]
+
+
+def assess(
+    reply: WritingReply,
+    post_format: PostFormat,
+    limits: WritingLimits,
+    fact_set: FactSet,
+    prompt_facts: FactSet,
+    size: LongSize,
+) -> Assessment:
+    parts = build_parts(reply_texts(reply), post_format, limits)
+    reported, unknown = collect_fact_ids(reply.fact_ids, fact_set)
+    used = with_disputed_facts(reported, [part.text for part in parts], prompt_facts)
+    violations = [*check_length(parts, post_format, limits), *check_size(parts, used, size)]
+    return Assessment(parts, reported, used, unknown, violations)
+
+
 async def write_draft(
     client: LLMClient,
     fact_set: FactSet,
@@ -274,32 +361,41 @@ async def write_draft(
         raise ValueError("fact set must not be empty")
     framing = angle.strip() if angle is not None and angle.strip() else None
     prompt_facts = facts_for_prompt(fact_set, post_format, limits)
+    size = long_size(post_format, limits, prompt_facts)
     messages = render_writing(
         prompt_facts,
         post_format,
         max_chars=limits.text_max_chars(post_format),
         max_tweets=limits.thread_max_tweets,
         budget=limits.short_budget,
+        long_size=size,
         examples=examples,
         angle=framing,
         revision=revision,
     )
     reply = await request_reply(client, messages, post_format)
     attempts = 1
-    parts = build_parts(reply_texts(reply), post_format, limits)
-    violations = check_length(parts, post_format, limits)
+    assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size)
     for _ in range(limits.length_retries(post_format)):
-        if not violations:
+        if not assessment.violations:
             break
         messages = [
             *messages,
             Message(role=Role.ASSISTANT, content=reply.model_dump_json()),
-            length_correction(parts, violations, post_format, limits),
+            length_correction(
+                assessment.parts,
+                assessment.violations,
+                post_format,
+                limits,
+                unused_fact_ids(prompt_facts, assessment.used),
+            ),
         ]
         reply = await request_reply(client, messages, post_format)
         attempts += 1
-        parts = build_parts(reply_texts(reply), post_format, limits)
-        violations = check_length(parts, post_format, limits)
+        assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size)
+    parts = assessment.parts
+    violations = assessment.violations
+    used = assessment.used
     dropped: list[str] = []
     if violations and post_format is PostFormat.SHORT and limits.short_drop_tail:
         trimmed = tail_to_drop(parts, fact_set, limits)
@@ -307,8 +403,7 @@ async def write_draft(
             kept, dropped = trimmed
             parts = [DraftPart(text=kept)]
             violations = check_length(parts, post_format, limits)
-    reported, unknown = collect_fact_ids(reply.fact_ids, fact_set)
-    used = with_disputed_facts(reported, [part.text for part in parts], prompt_facts)
+            used = with_disputed_facts(assessment.reported, [kept], prompt_facts)
     draft = Draft(
         post_format=post_format,
         parts=parts,
@@ -325,7 +420,7 @@ async def write_draft(
         len(draft.parts),
         len(prompt_facts.facts),
         len(used),
-        unknown,
+        assessment.unknown,
         len(draft.unverified_numbers),
         len(violations),
         attempts,
