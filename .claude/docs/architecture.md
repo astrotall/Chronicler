@@ -176,13 +176,73 @@ class ResearchSource(Protocol):
     async def search(self, query: str) -> list[Snippet]: ...
 ```
 
-- A source takes one query and returns snippets: text, URL, title, language.
+The protocol is in `app/research/source.py`. `Snippet` and `SnippetOrigin` are in
+`app/domain/snippet.py`, because the facts step reads snippets.
+
+- A source takes one query and returns snippets. `Snippet` carries `id`, `origin`, `title`, `url`,
+  `text` and `lang`.
+  - `url` and `origin` are required. A blank or non-http(s) url fails validation, so a snippet
+    with no provenance cannot exist. A source drops a provider result that fails validation and
+    logs the count, never the content.
+  - `id` is the first 16 hex characters of the sha256 of the normalised url (lowercase scheme and
+    host, no fragment, no trailing slash). It is derived in the model, so it is the same between
+    runs and survives truncating the text.
+  - `lang` is `ru` or `en` for Wikipedia and `None` for Tavily, whose API does not report it.
 - A source validates the provider's response with Pydantic at the boundary and returns only
   `Snippet` objects. Provider JSON never leaves `app/research`.
-- A source raises a typed error on failure. The service that fans out to sources decides to skip
-  it (see [pipeline.md](pipeline.md), "Failure behaviour").
-- Starting sources: Wikipedia ru, Wikipedia en (one class parameterised by language) and Tavily.
-  A new source is a new class and a config entry, with no change to the pipeline.
+- A source raises a `SourceError` subclass on failure (`app/research/errors.py`):
+
+| Exception                     | When                                                    |
+| ----------------------------- | ------------------------------------------------------- |
+| `SourceError`                 | Base class. Carries the source name and a reason        |
+| `SourceAuthError`             | 401, 403                                                |
+| `SourceRateLimitError`        | 429                                                     |
+| `SourceRequestError`          | Any other 4xx, or an `error` object in a MediaWiki reply |
+| `SourceUnavailableError`      | 5xx or a network error                                  |
+| `SourceInvalidResponseError`  | A body that is not the documented shape                 |
+
+  The reason holds the HTTP status or the exception class, never a response body. No `httpx` or
+  `ValidationError` leaves `app/research`. Sources do not retry: a failed source is skipped.
+- Sources share one `httpx.AsyncClient`, built by `build_research_http_client(settings)`
+  (`app/research/http.py`) with the `RESEARCH_*` timeouts. `app/research` does not import
+  `app/llm`, so it has its own builder.
+- Starting sources: `WikipediaSource` (one class parameterised by language, ru and en) and
+  `TavilySource`. `build_sources(settings, client)` in `app/research/factory.py` builds the
+  enabled ones: Wikipedia needs `WIKIPEDIA_CONTACT`, Tavily needs `TAVILY_API_KEY`. A blank value
+  counts as not set. `log_source_availability(settings)` logs one warning per disabled source,
+  without values, and one more if none is enabled. `app/main.py` calls it at startup and does not
+  stop. A new source is a new class and a line in the factory, with no change to the orchestrator.
+
+### Research orchestrator
+
+`ResearchService` (`app/services/research.py`) takes the sources and `ResearchLimits` (built from
+settings by `ResearchLimits.from_settings`) and returns a `ResearchResult`: `snippets` and
+`failures`, both in `app/domain/research.py`.
+
+- Every query goes to every source. Each `source.search` call runs in `asyncio.gather` under a
+  `Semaphore(RESEARCH_MAX_CONCURRENCY)`.
+- A `SourceError` becomes a `SourceFailure` (source, query, exception class, reason) and is logged
+  at WARNING. Any other exception is a bug and propagates. If every source fails, or none finds
+  anything, the result is still returned, with an empty `snippets`. Whether that is enough is the
+  next step's decision.
+- Snippets are then filtered by domain, deduplicated and truncated, in this order:
+  1. Domain filter: `RESEARCH_BLOCKED_DOMAINS` drops a host that equals a listed domain or is its
+     subdomain. If `RESEARCH_ALLOWED_DOMAINS` is not empty, only matching hosts stay. Blocked wins
+     over allowed. Both lists are empty by default. The filter applies to every origin, so an
+     allow-list that omits `wikipedia.org` also drops Wikipedia.
+  2. Deduplication by normalised url. Of several snippets with one url the longest text stays,
+     and on a tie the first. It keeps the place of the first occurrence.
+  3. Truncation of `text` to `RESEARCH_SNIPPET_MAX_CHARS`, with trailing whitespace removed.
+
+### Query planning
+
+`plan_queries(client, topic)` (`app/services/query_planning.py`) calls `complete_json` on the
+`query_planning` client with the `QueryPlan` schema and returns the queries. `QueryPlan` holds 3 to
+5 queries: each is stripped and non-empty, and no two are equal ignoring case. A reply that breaks
+this is an invalid reply: the LLM client sends the problems back, and after
+`LLM_JSON_MAX_RETRIES` it raises `LLMInvalidResponseError`. `plan_queries` does not catch it, and
+it does not catch other LLM errors. The prompt is `app/prompts/query_planning.py`. It asks for
+queries in Russian and in English, but code does not check the languages.
 
 ## Configuration
 

@@ -24,6 +24,64 @@ closed. A decision on an open question is recorded here in the same change that 
 | LLM clients on plain `httpx`, no SDK      | Two small endpoints. No new dependency, and retries, timeouts and errors stay under our control |
 | Structured replies by schema instruction, validation and retry | Works the same on both providers. DeepSeek adds `json_object` mode. Anthropic's native `output_config.format` takes a subset of JSON Schema, and an unsupported keyword is a 400 with no retry |
 | DeepSeek thinking off by default          | Thinking ignores `temperature` and spends `max_tokens` on reasoning. `DEEPSEEK_THINKING=true` turns it on |
+| Snippet id is the hash of the normalised URL | Stable between runs: Tavily returns other chunks of the same page for other queries, so a hash of the text would change. Dedup by URL leaves one snippet per URL, so ids do not collide |
+| Snippet `lang` is `None` for Tavily       | The Tavily API does not report a language. Guessing it would put wrong labels on snippets      |
+| One Wikipedia article is one snippet      | Dedup by URL drops the fragment, so section snippets of one article would collapse into one     |
+| Wikipedia text: lead plus following sections, up to a limit | See "Wikipedia extracts" below                                              |
+| Wikipedia needs a contact in config, Tavily needs a key | Wikimedia's User-Agent policy asks for contact data. Without either, that source is off with a warning and the others work |
+| Tavily `search_depth=basic` by default    | 1 credit per query instead of 2. `advanced` is a config value                                  |
+| Every query goes to every source         | See "Source routing" below                                                                      |
+| A duplicate query is an invalid plan, not a repair | The client's retry asks the model for a corrected list. Code silently dropping entries could leave fewer than 3 |
+| The domain filter is in the orchestrator, for all origins | One place, one behaviour. Allow and block lists are empty by default              |
+
+## Details of decided questions
+
+### Wikipedia extracts
+
+Source: `list=search` for the top `WIKIPEDIA_MAX_ARTICLES` (2) titles, then one `prop=extracts`
+request per article with `explaintext` and `exsectionformat=wiki`, so the headings stay as
+`== Heading ==`. A full-article extract is limited to one page per request (the API lowers
+`exlimit` to 1), so articles are fetched one after another. The same request asks for
+`pageprops` and `info`: a page marked `disambiguation` is skipped, and the canonical URL is
+taken from `fullurl`, with no extra request.
+
+- Why not the lead only: the lead of "Куликовская битва" is 642 characters in a 44,000-character
+  article. It has the date and the sides but little else, and the facts step would starve.
+- What is kept: the lead whole, then the sections in article order, cut at a line boundary at
+  `WIKIPEDIA_EXTRACT_MAX_CHARS` (6000). A heading left at the end of the cut is dropped.
+- What is removed: everything from the first service section on (Примечания, Литература, Ссылки,
+  См. также, Источники, Комментарии; References, External links, Further reading, See also,
+  Notes, Bibliography, Sources, Footnotes, Citations). These sections are last in an article and
+  hold book titles and years that would read as facts. The names are in
+  `app/config/constants.py`.
+- Stress marks: the Russian plain text contains the combining acute accent (`Кулико́вская`). It is
+  removed. The quote check in the facts step compares against this text, and a model will not
+  reproduce a mark that is invisible.
+- Known limit: the cut keeps the start of the article. For a long article the 6000 characters end
+  before the middle sections, so the later part (for the battle, the battle itself) is not in the
+  snippet. Wikipedia gives context and dates, and the web search is expected to supply detail. If
+  that proves too thin, the options are a larger limit or choosing sections per query.
+
+### Tavily parameters
+
+`POST https://api.tavily.com/search` with `Authorization: Bearer <key>`.
+
+- `search_depth=basic`, `max_results=5`, `chunks_per_source=3`, all in config.
+- `chunks_per_source` is sent for `basic`, `advanced` and `fast`, where the documentation says it
+  applies, and not for `ultra-fast`.
+- The snippet text is the `content` field: up to three short chunks of the page that match the
+  query, joined with ` [...] `. It is cleaned text, not HTML. `raw_content` is not requested: a
+  whole page is long, and its start is mostly navigation.
+- Cost: 1 credit per query on `basic`, so up to 5 credits per topic. `advanced` is 2 credits.
+- The response `score` is not used.
+
+### Source routing
+
+Every query goes to every source, with no routing by language. With 5 queries, two Wikipedia
+editions and Tavily that is 15 `search` calls and about 35 HTTP requests per topic (each Wikipedia
+call is 1 search plus up to 2 article requests). It is simple and wasteful: a Russian query sent
+to English Wikipedia mostly finds little. Routing Russian queries to ru and English ones to en
+can be added later in the orchestrator without touching the sources.
 
 ## Open questions
 

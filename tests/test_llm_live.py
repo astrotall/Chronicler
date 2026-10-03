@@ -1,27 +1,13 @@
 import pytest
-from app.config.constants import (
-    API_KEY_ENV_NAMES,
-    ENV_FILE,
-    ENV_FILE_ENCODING,
-    LLMProvider,
-    LLMStep,
-)
+from app.config.constants import API_KEY_ENV_NAMES, LLMProvider, LLMStep
 from app.config.settings import Settings
 from app.domain.llm import Message, Role
 from app.llm.factory import LLMClientFactory, build_http_client
 from pydantic import BaseModel, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from live_keys import LiveKeys, skip_without_key
 
 MAX_TOKENS = 2000
-
-
-class LiveKeys(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=ENV_FILE, env_file_encoding=ENV_FILE_ENCODING, extra="ignore"
-    )
-
-    deepseek_api_key: SecretStr | None = None
-    anthropic_api_key: SecretStr | None = None
 
 
 class Capital(BaseModel):
@@ -29,14 +15,8 @@ class Capital(BaseModel):
     city: str
 
 
-def has_live_key(key: SecretStr | None) -> bool:
-    return key is not None and bool(key.get_secret_value().strip())
-
-
-def skip_without_key(provider: LLMProvider, key: SecretStr | None) -> pytest.MarkDecorator:
-    return pytest.mark.skipif(
-        not has_live_key(key), reason=f"{API_KEY_ENV_NAMES[provider]} is not set"
-    )
+def skip_without_provider_key(provider: LLMProvider, key: SecretStr | None) -> pytest.MarkDecorator:
+    return skip_without_key(API_KEY_ENV_NAMES[provider], key)
 
 
 KEYS = LiveKeys()
@@ -45,7 +25,7 @@ PROVIDERS = pytest.mark.parametrize(
     [
         pytest.param(
             provider,
-            marks=[pytest.mark.integration, skip_without_key(provider, key)],
+            marks=[pytest.mark.integration, skip_without_provider_key(provider, key)],
         )
         for provider, key in (
             (LLMProvider.DEEPSEEK, KEYS.deepseek_api_key),
@@ -53,20 +33,6 @@ PROVIDERS = pytest.mark.parametrize(
         )
     ],
 )
-
-
-@pytest.mark.parametrize(
-    ("key", "expected"),
-    [
-        (None, False),
-        (SecretStr(""), False),
-        (SecretStr("  \t\n"), False),
-        (SecretStr("sk-live-key"), True),
-    ],
-    ids=["none", "empty", "whitespace", "set"],
-)
-def test_has_live_key(key: SecretStr | None, expected: bool) -> None:
-    assert has_live_key(key) is expected
 
 
 def live_settings(provider: LLMProvider) -> Settings:
