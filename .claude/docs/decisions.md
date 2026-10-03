@@ -49,7 +49,7 @@ closed. A decision on an open question is recorded here in the same change that 
 | The topic is a frame for the writer, not a source | It tells the model what the post is about and what could hook. Every claim, number and date comes from the facts; a number only in the topic is reported as unverified |
 | The writer sees fact ids, texts and statuses, never quotes or URLs | The post is written in the model's words, not copied from a source |
 | Disputed facts go to the writer in their own block | A disputed fact is never in the list of facts to state, so the model cannot state it flatly by mistake |
-| An unverified number in a post is a warning, not a regeneration | The author sees it next to the post. See "Matching numbers and dates" below |
+| An unverified number regenerates the post in step 5 (HIS-7) | Step 4 only lists it; style rules say a figure not among the facts is rejected. See "Style filter" below |
 | One writing method for every button      | Angle and revision are optional inputs of `write_draft`; a button re-enters step 4 without new code paths |
 | The writer replies in JSON, fact ids first | `complete_json` validates the reply. Ids first make the model pick facts before it writes; the text is the last field |
 | Length: one retry with the exact problems, then deliver marked | See "Length limits" below. For `long` and `thread`; a short post has its own rules, see "Short post length" |
@@ -67,6 +67,18 @@ closed. A decision on an open question is recorded here in the same change that 
 | Dates, years, terms, sums, sizes, ages and percentages in digits; small counts may be words | Digits are what the number check sees. "два войска" reads naturally and is not a risk; the risk is a computed interval ("через два года"), which the rule forbids when no fact states it |
 | The thread format rule no longer says "each tweet reads on its own" | It pushed the model to close every tweet with a comment. Replaced by "may be one short sentence, needs no closing line, is never a fragment" |
 | Em and en dash forbidden, a spaced hyphen " - " replaces them | The author's decision. "Replace with a full stop, a comma or a colon" made the model put an awkward comma where the dash was. The rule says the spaced hyphen replaces a dash only, so it does not become a default punctuation mark |
+| Style filter: code checks, then an LLM critic, then up to 2 regenerations | See "Style filter" below |
+| The filter never edits the text; a regeneration is `write_draft` with a `Revision` | One writing path for every change. The text the author gets is always the writer's, checked again |
+| The critic runs even when code already found something | One regeneration then fixes everything at once |
+| The critic quotes an excerpt, and code checks it occurs in the post | The critic can invent a problem in a sentence the post does not have |
+| A critic finding has a verdict after the explanation | The same device as for contradictions: the model reasons first and can withdraw a finding |
+| A critic or regeneration failure never loses the post | The deterministic checks already ran; the post goes out flagged (`critic = failed`, `regeneration_failed`) instead of the bot failing |
+| A length violation alone does not regenerate | Step 4 already spent its retries on it. The author's decision |
+| The best version: fewest dangerous violations, then fewest in total, the later on a tie | An unsupported claim is worse than a cliche. The dangerous rules are data, `DANGEROUS_STYLE_RULES` |
+| Hook, rhythm and thread structure are not checked | Subjective; a critic verdict on them would drive regenerations by taste. Prompt and few-shot only. The author's decision |
+| No deterministic triplet check | A list of names from the facts is legitimate. The critic checks rhetorical triplets only |
+| Phrase matching by stems, no morphology library | No new dependency. Words in `BANNED_PHRASE_EXACT_WORDS` match whole, against false positives such as "в заключении мира" |
+| "не просто X, а Y" banned with or without "это" | The author's decision: "Он был не просто город, а крепость" is the same frame |
 
 ## Details of decided questions
 
@@ -170,6 +182,49 @@ and the commander. The posts fit but read like an encyclopedia entry: the duel o
 nickname Донской and Ягайло's delay never reach a short post. Six and four samples are noise-level
 evidence. Open: whether the selection should favour a hook over the core facts (an LLM choice, or
 another selection for "другой заход").
+
+### Style filter
+
+HIS-7 built step 5 (see [pipeline.md](pipeline.md)). The live HIS-21 drafts showed what the number
+check cannot see: filler closers that rate the fact before them ("Это решило многое", "Эта деталь
+держит внимание даже спустя столетия"), conclusions no fact states ("Победа на Дону не отменила ни
+ордынской силы"), added qualifiers and precisions ("По преданию", "Место известно точно", "Уже в
+1382 году") and a pronoun that made a false claim ("вёл их князь Дмитрий" about both armies). The
+critic reads the post against the facts for exactly these.
+
+Measured with `tests/test_style_live.py`, DeepSeek, the Kulikovo and Apollo 11 fact sets of the
+generator live test:
+
+- Known defects in the saved HIS-21 drafts and two filler closers written into a synthetic thread:
+  13 of 14 found in one run. Missed: one "Я не берусь выбирать между этими цифрами" (the same phrase
+  in another draft was found).
+- Questionable findings on the same bad drafts: "Победа дала Дмитрию прозвище Донской" flagged as
+  an added cause (the fact says "после победы"), and "Он"/"Тот не был Чингизидом" right after
+  Mamai flagged as ambiguous. Strict but arguable.
+- Relatively clean drafts (12 drafts: the HIS-21 dash runs of both topics and the Apollo 11 runs
+  without examples): no findings.
+- Fresh Kulikovo drafts, 2 threads and 2 short posts: all clean at the first check, no
+  regeneration. Started from four known bad drafts, three threads were clean after one
+  regeneration. A pre-HIS-22 short draft, which states facts outside today's short selection,
+  lost those sentences in the regeneration (the writer is given only the selection) and kept one
+  ambiguous-pronoun finding after 2 regenerations.
+
+One run per cell is noise-level evidence.
+
+Known gaps, accepted:
+
+- Stem matching misses forms whose stem changes, and a word's stem can catch an unrelated word
+  next to the other words of a phrase. The critic catches other wordings of a stock frame.
+- A critic finding can be wrong; it still regenerates. Its excerpt must exist in the post, which
+  stops invented findings, not wrong judgements. One finding may be reported under two rules
+  (`unsupported_claim` and `filler` for one sentence) and then counts twice.
+- A regeneration may drop content to fix a problem; the filter compares violations, not how much
+  of the facts the post keeps.
+- A closing question inside a closing quote is not flagged; a final `?` of a quoted question
+  without a closing quote is.
+- `EMOJI_RANGES` is a list of blocks, not the full emoji definition; dingbats such as ✓ count as
+  emoji.
+- Hook, rhythm and thread structure are not checked at all.
 
 ### Wikipedia extracts
 
@@ -288,8 +343,8 @@ How the verifier compares a number in the post with the facts.
     are allowed and stay unchecked. A rule narrows the gap, it does not close it.
   - Approximate wording is ignored: `около 300` and `300` are the same number to the check.
   - `1.500` reads as 1500; a date with dots splits into the day and month and the year.
-- Still open: whether Roman numerals and numbers in words get a conversion, and whether step 5
-  turns a warning into a regeneration.
+- Since HIS-7 step 5 turns every unverified number into a violation that regenerates the post.
+- Still open: whether Roman numerals and numbers in words get a conversion.
 
 ### Merged claims
 
@@ -337,9 +392,10 @@ similar to the topic. Also how many fit before the prompt costs more than the st
 
 What happens when the critic keeps finding violations after the 2 allowed regenerations.
 
-- Provisional default (in [pipeline.md](pipeline.md)): deliver the draft with the unresolved
-  violations listed.
-- To settle: whether the author prefers a hard stop.
+- Implemented in HIS-7 as the provisional default (in [pipeline.md](pipeline.md), step 5): deliver
+  the best version with the unresolved violations listed.
+- To settle: whether the author prefers a hard stop, and whether the dangerous rules should block
+  delivery rather than only weigh more.
 
 ### Persistence content
 

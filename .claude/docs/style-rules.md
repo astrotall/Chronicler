@@ -33,7 +33,8 @@ Posts are in Russian. This document is in English; the Russian examples are the 
 
 5. These constructions are forbidden, in any inflection or letter case:
 
-   - "это не просто X, а Y" (the whole "not just X, but Y" frame)
+   - "это не просто X, а Y" and "не просто X, а Y" (the whole "not just X, but Y" frame, with or
+     without "это": "Он был не просто город, а крепость" is caught, "не просто так" is not)
    - "давайте разберёмся"
    - "давайте погрузимся"
    - "стоит отметить"
@@ -47,6 +48,12 @@ Posts are in Russian. This document is in English; the Russian examples are the 
    to grow. Adding a phrase or an example is a change to that module only: the writing prompt
    renders its rules block from it (`app/prompts/style_rules.py`, in Russian), and the style
    filter and the critic read the same data.
+
+   "In any inflection" is a stem match without a morphology library: each word of a phrase loses a
+   common Russian ending and matches any ending, short words match whole, `X` and `Y` stand for 1
+   to 8 words, and a phrase never spans two sentences. A word in `BANNED_PHRASE_EXACT_WORDS`
+   matches whole: "в заключение" is banned, "в заключении мира" is not. The details are in
+   [pipeline.md](pipeline.md), step 5.
 
 ## Structure
 
@@ -125,28 +132,30 @@ The author's voice is set mainly by examples, not by rules.
 ## How the rules are enforced
 
 The banned-phrase list is only part of the defence against AI slop. A model learns to avoid a
-list and finds the next cliche. The main levers are few-shot examples and the critic pass.
+list and finds the next cliche. The main levers are few-shot examples and the critic pass. The
+filter is step 5 in [pipeline.md](pipeline.md).
 
-| Rule                                          | Enforced by                          |
-| --------------------------------------------- | ------------------------------------ |
-| 4 dashes                                      | Deterministic                        |
-| 5 banned phrases                              | Deterministic (pattern list in config) |
-| 9 emoji, 10 hashtags                          | Deterministic                        |
-| 11 closing question                           | Deterministic (a final `?`), critic confirms the intent |
-| 12 length                                     | Deterministic                        |
-| 3 invented personal experience                | Deterministic for known phrases ("я видел", "я был там"), critic for the rest |
-| 6 triplets                                    | Critic, with a rough deterministic hint |
-| 7 hook                                        | Critic                               |
-| 8 rhythm                                      | Critic, with a deterministic sentence-length spread as a hint |
-| 1, 2 voice, opinion cap                       | Few-shot and critic                  |
-| 13 filler sentences                           | Critic                               |
-| 14 meaning beyond the facts                   | Critic, reading the post against the facts |
-| 15 numbers in digits                          | Deterministic for digits (the number check of step 4), critic for numbers in words |
-| 16 thread structure                           | Critic                               |
+| Rule                                          | Enforced by                                                    |
+| --------------------------------------------- | -------------------------------------------------------------- |
+| 4 dashes                                      | Deterministic, `FORBIDDEN_DASHES`                              |
+| 5 banned phrases                              | Deterministic, stem match of `BANNED_PHRASES`; the critic flags other wordings of a stock frame as `cliche` |
+| 9 emoji, 10 hashtags                          | Deterministic                                                  |
+| 11 closing question                           | Deterministic: the last part ends with `?`; the caller can allow it |
+| 12 length                                     | Deterministic, step 4; reported by the filter, regenerates only together with another violation |
+| 3 invented personal experience                | Deterministic for `INVENTED_EXPERIENCE_PHRASES`, critic for other wordings |
+| 6 triplets                                    | Critic, rhetorical triplets only; a list from the facts is fine |
+| 2 opinion cap and opinion as a closing line   | Critic                                                         |
+| 13 filler sentences                           | Critic                                                         |
+| 14 meaning beyond the facts                   | Critic, reading the post against the facts: conclusions, causes, claims of importance, added qualifiers ("по преданию") and precisions ("точно", "уже"), and pronouns that change the meaning |
+| 15 numbers in digits                          | Deterministic for digits (the number check of step 4, a violation in step 5); a computed interval in words is an unsupported claim for the critic |
+| 1 voice, 7 hook, 8 rhythm, 16 thread structure | Not enforced automatically: prompt and few-shot only          |
 
 A deterministic check is a hard gate. A critic finding is also a gate (it triggers a
-regeneration), but the critic is a model and can be wrong, so its verdict is shown to the author
-if the attempts run out.
+regeneration), but the critic is a model and can be wrong, so its findings are shown to the
+author if the attempts run out, and an excerpt the critic quotes must occur in the post or the
+finding is dropped. When the attempts run out, the version with the fewest dangerous violations
+(`DANGEROUS_STYLE_RULES`: unsupported claims, unverified numbers, ambiguous pronouns, invented
+experience) goes out, then the fewest violations in total.
 
 ## Examples
 
@@ -161,6 +170,7 @@ Dash (rule 4):
 Banned frame (rule 5):
 
 - Плохо: `Это не просто крепость, а символ эпохи.`
+- Плохо: `Он был не просто город, а крепость.`
 - Хорошо: `Крепость строили одиннадцать лет, и за это время сменилось три князя.`
 
 Invented experience (rule 3):

@@ -288,7 +288,8 @@ full behaviour is in [pipeline.md](pipeline.md), step 4.
 | `app/services/style.py`          | `load_examples(directory, limit)`: the few-shot loader                   |
 | `app/prompts/writing.py`         | `render_writing`, `render_length_correction` and `render_short_correction` |
 | `app/prompts/style_rules.py`     | `render_style_rules`: the Russian rules block, shared with the critic prompt of step 5 |
-| `app/config/style.py`            | Style rule data: banned phrases, forbidden dashes, invented-experience phrases, cautious wordings |
+| `app/config/style.py`            | Style rule data: banned phrases, forbidden dashes, invented-experience phrases, cautious wordings, and the data the style filter matches with (see "Style filter") |
+| `app/services/disputes.py`       | `with_disputed_facts`: adds the disputed facts a draft states to `used_fact_ids` |
 | `app/domain/draft.py`            | `PostFormat`, `DraftPart`, `LengthIssue`, `LengthViolation`, `Revision`, `Draft` |
 
 - One `complete_json` call (`WRITING_*_MAX_TOKENS` per format), and one more only when a length
@@ -306,6 +307,37 @@ full behaviour is in [pipeline.md](pipeline.md), step 4.
 - LLM errors and `LLMInvalidResponseError` propagate. Texts of posts, facts and replies are never
   logged; the INFO line holds counters only.
 
+### Style filter
+
+`review_style(writer, critic, draft, fact_set, writing_limits, style_limits, examples, *, angle,
+allow_closing_question)` (`app/services/style_review.py`) takes the `writing` and the
+`style_critique` clients, a `Draft` from `write_draft`, its `FactSet`, `WritingLimits`,
+`StyleLimits` (built by `StyleLimits.from_settings`), the same examples and angle the draft was
+written with, and whether a closing question is allowed. It returns a `StyleResult` from
+`app/domain/style.py`. The full behaviour is in [pipeline.md](pipeline.md), step 5.
+
+| Module                            | Holds                                                                   |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `app/services/style_filter.py`    | Pure functions: `check_draft` and one check per deterministic rule, the phrase matcher (`phrase_pattern`, `find_phrases`) |
+| `app/services/style_critic.py`    | The reply schema (`CriticReply`), `critique_draft`, the excerpt check against the draft |
+| `app/services/style_review.py`    | `StyleLimits`, the evaluation of a version, the regeneration loop, the choice of the best version |
+| `app/prompts/style_critique.py`   | `render_critique`, `render_style_revision`, the Russian explanation templates of code violations |
+| `app/domain/style.py`             | `StyleRule`, `ViolationSource`, `CriticStatus`, `Violation`, `StyleReport`, `StyleResult` |
+| `app/config/style.py`             | Besides the rules: `PHRASE_PLACEHOLDERS`, `PHRASE_STEM_ENDINGS`, `PHRASE_MIN_STEM_CHARS`, `BANNED_PHRASE_EXACT_WORDS`, `EMOJI_RANGES`, `DANGEROUS_STYLE_RULES` |
+
+- The checks read `app/config/style.py` as a module (`from app.config import style`) at call time,
+  so a test that changes the data with `monkeypatch` checks the real path. `DANGEROUS_STYLE_RULES`
+  holds rule names as strings, because `config` does not import `domain`.
+- A regeneration is a plain `write_draft` call with a `Revision`; the generator knows nothing about
+  the filter. The excerpt check reuses `check_quote` and `text_segments` from
+  `app/services/quote_check.py`, and the critic prompt reuses the fact and dispute blocks of
+  `app/prompts/writing.py`, so the critic sees the facts exactly as the writer does.
+- `LLMError` from the critic and from a regeneration is caught in `style_review.py`, logged at
+  WARNING with the class name only, and turned into `CriticStatus.FAILED` or
+  `regeneration_failed`. Other exceptions propagate.
+- Texts of posts, facts, excerpts, explanations and replies are never logged; the INFO line holds
+  counters and rule names.
+
 ## Configuration
 
 - All settings come from one Pydantic settings model, filled from environment variables and an
@@ -313,6 +345,9 @@ full behaviour is in [pipeline.md](pipeline.md), step 4.
 - The model holds: the Telegram token, the whitelist of Telegram IDs, provider keys, the provider
   per step, model names, source URLs, retry and attempt limits, length limits, the examples
   directory and the number of few-shot examples.
+- The style filter settings are `STYLE_CRITIC_ENABLED`, `STYLE_MAX_REGENERATIONS` and
+  `STYLE_CRITIC_MAX_FINDINGS`. The critic's schema limits (explanation and excerpt length) are
+  constants in `app/config/constants.py`, because a Pydantic reply schema is static.
 - The banned-phrase list and the other style rule data are constants in `app/config/style.py`,
   not environment variables: a phrase such as "это не просто X, а Y" contains the comma that a
   list in one variable would split on.

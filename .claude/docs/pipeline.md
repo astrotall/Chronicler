@@ -244,8 +244,8 @@ job. An empty `FactSet` is a `ValueError` before any call.
 - **Code checks numbers and dates.** Every number in every part (`extract_numbers`, the rules of
   step 3) must be among the numbers of the texts of all facts in the `FactSet`, disputed ones
   included, because a post may state both versions. Numbers that are not are listed in
-  `Draft.unverified_numbers`. This is a warning shown to the author, not a rejection and not a
-  regeneration; whether step 5 folds it into its regeneration loop is decided there.
+  `Draft.unverified_numbers`. Step 4 itself does not reject or regenerate; step 5 turns every
+  such number into a violation that triggers a regeneration (see step 5).
 - An LLM error or an invalid reply is not caught. One INFO line logs the format and counters:
   parts, facts offered to the model, used facts, unknown ids, unverified numbers, length
   violations, attempts, dropped pieces. Texts are never logged.
@@ -267,16 +267,132 @@ links and emoji the two counts match; posts here have no emoji by rule 9.
 
 ### 5. Style filter
 
-Input: a `Draft`. Output: an accepted `Draft`, or a regeneration request.
+Input: a `Draft`, its `FactSet`, the writing context (limits, examples, angle) and
+`allow_closing_question`. Output: a `StyleResult`. The filter never edits the text itself: it
+finds violations, asks the writer for a new version, and picks which version goes out.
 
-- Deterministic checks first (cheap, exact): dashes, banned phrases, emoji, hashtags, a closing
-  question, structural tells. The full list is in [style-rules.md](style-rules.md). The dash check
-  catches only the em and en dash; a hyphen, spaced or not, passes.
-- Then the LLM critic (`style_critique`) judges what regexes cannot: triplets, a flat opening, a
-  uniform rhythm, invented personal experience, tone drift from the few-shot examples.
-- On any violation the writer is called again with a list of exactly what to fix. At most 2
-  regeneration attempts. If the draft still fails, it is delivered anyway with the unresolved
-  violations listed, so the author decides. The bot does not silently loop.
+`review_style(writer, critic, draft, fact_set, writing_limits, style_limits, examples, *, angle,
+allow_closing_question)` in `app/services/style_review.py`.
+
+#### Deterministic checks
+
+`check_draft(draft, *, allow_closing_question)` in `app/services/style_filter.py`. It runs on
+`Draft.texts`, so a numbering prefix is never checked. Every rule datum is read from
+`app/config/style.py` at call time; adding a phrase is a change to that module only.
+
+| Rule                  | Violation                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `dash`                | Each character of `FORBIDDEN_DASHES` (em and en dash). A hyphen, spaced or not, never |
+| `banned_phrase`       | A match of a phrase of `BANNED_PHRASES` (see "Phrase matching")                       |
+| `invented_experience` | A match of a phrase of `INVENTED_EXPERIENCE_PHRASES`                                  |
+| `emoji`               | A run of characters in `EMOJI_RANGES`. `№`, `°`, `©` are not emoji                     |
+| `hashtag`             | `#` followed by a word, not after a letter or `&` (`C#`, `&#123;` pass)               |
+| `closing_question`    | The last part ends with `?`, unless the caller allows it. A text that ends with a closing quote (`«Где войско?»`) is quoted speech and passes |
+| `length`              | Each entry of `Draft.length_violations`, as computed by step 4. Never recounted        |
+| `unverified_number`   | Each number of `Draft.unverified_numbers`                                              |
+
+Each violation carries the part (1-based) and an excerpt from the original text: the match, or for
+a dash and an emoji the character with up to `STYLE_EXCERPT_CONTEXT_WORDS` (3) words on each
+side. A length violation has no excerpt, a number violation has the number. The explanation is a
+Russian template from `app/prompts/style_critique.py`.
+
+There is no deterministic triplet check: a list of names from the facts ("Армстронг, Олдрин и
+Коллинз") is legitimate and would be a false positive. Rhetorical triplets are the critic's.
+
+#### Phrase matching
+
+No dependency. Each phrase becomes a regular expression:
+
+1. The phrase is split into words. `X` and `Y` (`PHRASE_PLACEHOLDERS`) stand for 1 to
+   `PHRASE_PLACEHOLDER_MAX_WORDS` (8) words.
+2. A word shorter than `PHRASE_MIN_STEM_CHARS` (3) or listed in `BANNED_PHRASE_EXACT_WORDS` must
+   match whole. Any other word loses its longest ending from `PHRASE_STEM_ENDINGS` that leaves at
+   least 3 letters, and matches the stem followed by any letters: "давайте разберёмся" catches
+   "Давай разберём", "стоит отметить" catches "стоило отметить".
+3. Between words: if the phrase has a punctuation mark there (the comma of "X, а Y"), that mark
+   with optional spaces; otherwise any run of characters that are neither letters nor sentence ends
+   (`.!?…`). So a phrase never spans two sentences, and "не просто так" without ", а ..." passes.
+4. Case is ignored and `е` matches `ё`. The match runs on the original text, so the excerpt is
+   what the author wrote. Overlapping matches of one rule count once ("это не просто X, а Y" and
+   "не просто X, а Y").
+
+`BANNED_PHRASE_EXACT_WORDS` holds "заключение": by stem, "в заключение" would also catch "в
+заключении мира" and "провёл 10 лет в заключении".
+
+#### Critic
+
+`critique_draft(client, texts, fact_set, max_findings)` in `app/services/style_critic.py`, LLM step
+`style_critique`, one `complete_json` call (`STYLE_CRITIC_MAX_TOKENS`). Off with
+`STYLE_CRITIC_ENABLED=false`.
+
+- **What it sees:** the parts (numbered `[1]`... for a thread), the rules block
+  (`render_style_rules`, the same text the writer gets), the facts that may be stated as `F1
+  [status]: text`, and the disputed facts grouped by dispute with its explanation, as the writer
+  sees them. The whole `FactSet`, not the short selection: a claim is supported if any fact states
+  it. Never quotes or URLs.
+- **What it looks for:** `unsupported_claim` (a conclusion, cause, consequence or claim of
+  importance no fact states; an added qualifier such as "по преданию"; an added precision or
+  emphasis such as "точно", "уже"; a computed interval; a disputed fact stated as established),
+  `ambiguous_reference` (a pronoun or omitted subject that makes the sentence claim something the
+  facts do not), `filler`, `opinion` (over `OPINION_MAX_PER_POST` or as a closing line), `cliche`,
+  `triplet` (rhetorical only; a list from the facts is not one) and `invented_experience`.
+- **Not its job:** honest retelling of a fact in other words (an explicit exception in the prompt),
+  cautious wording of a dispute, punctuation, emoji, hashtags, the closing question, length, digits,
+  and the hook, rhythm and thread structure (rules 7, 8, 16 are not enforced automatically).
+- **Reply:** `findings`, each `excerpt`, `rule`, `explanation` (Russian, for the author, at most
+  `STYLE_CRITIC_EXPLANATION_MAX_CHARS`), then `violation`. The verdict comes last so the model
+  reasons first; a finding with `violation: false` is withdrawn and counted. The rule is limited to
+  the critic's rules by the schema; an excerpt is at most `STYLE_CRITIC_EXCERPT_MAX_CHARS`.
+- **Code checks every excerpt.** It must occur in a part after the quote normalisation of step 3
+  (`check_quote`, case, spaces, quote marks, `ё`), at least `STYLE_CRITIC_EXCERPT_MIN_CHARS` (3)
+  long. Code assigns the part. A finding whose excerpt is in no part is dropped and counted: the
+  critic can invent too. A repeated finding (same rule, part and normalised excerpt) is kept once.
+- At most `STYLE_CRITIC_MAX_FINDINGS` (10) findings are used, the first ones after withdrawal;
+  the rest are dropped and counted, not rejected, because a retry repeats the whole review.
+
+#### Regeneration loop
+
+1. The draft is evaluated: deterministic checks, then the critic. The critic runs even when code
+   found something, so one regeneration fixes everything at once.
+2. If a violation other than `length` remains and the limit `STYLE_MAX_REGENERATIONS` (2) is not
+   used up, `write_draft` is called again with the same `FactSet`, format, examples and angle, and a
+   `Revision`: the previous texts and an instruction that lists every violation with its part,
+   excerpt and explanation and says to fix only these and keep the rest. The excerpts of phrase
+   rules found in this or any earlier attempt (banned phrase, invented experience and every critic
+   rule except `ambiguous_reference`) are listed as forbidden, so one stock phrase is not swapped
+   for another.
+3. The new draft goes through all of step 4 again (short selection, length retries, number check)
+   and then through step 5 from point 1.
+4. **A length violation alone does not regenerate:** step 4 already spent its own retries on it.
+   It is reported, counts when the best version is chosen, and is in the instruction when a
+   regeneration happens for another reason.
+5. With no violation there is no extra call: one critic call and no writer call.
+6. **The best version goes out:** the fewest violations of the rules in `DANGEROUS_STYLE_RULES`
+   (`unsupported_claim`, `unverified_number`, `ambiguous_reference`, `invented_experience`, data in
+   `app/config/style.py`), then the fewest violations in total, and on a tie the later one. Its
+   remaining violations are in `StyleResult.report`; nothing is hidden.
+
+Unverified numbers regenerate since HIS-7: style rules say a figure not among the facts is
+rejected, and a regeneration that names the number is cheap. A false positive of the number check
+costs up to 2 extra writer calls.
+
+#### Failures
+
+- **The critic fails** (`LLMError`, including an invalid reply after the client's retries): the
+  error class is logged at WARNING, that evaluation keeps its deterministic violations and gets
+  `critic = failed`. The post is never lost. Code violations still regenerate; a version that is
+  clean for code and unchecked by the critic counts as 0 violations, so the bot must show the
+  "critic did not check this text" warning from `report.critic`.
+- **A regeneration fails** (`LLMError` from `write_draft`): logged at WARNING, the loop stops,
+  `regeneration_failed` is set, and the best of the versions already evaluated goes out with its
+  violations.
+- One INFO line per review: format, attempts, chosen attempt, regenerations, whether a
+  regeneration failed, the critic status of each attempt, the number of violations, dangerous ones,
+  counts per rule name, and the dropped, withdrawn and over-limit findings. Texts, excerpts and
+  explanations are never logged.
+
+Worst case per post: 3 critic calls and 2 `write_draft` calls, each of which may make up to 3 writer
+calls for a short post (the length retries).
 
 ### 6. Delivery
 
@@ -318,6 +434,10 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `SentenceBudget`    | `max_sentences` and `sentence_chars` of a short post, derived from `SHORT_MAX_CHARS` and `SHORT_SENTENCE_CHARS` |
 | `Revision`          | `instruction` and `previous` (the texts of the previous draft's parts), for "короче" and "ещё вариант"    |
 | `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the author copies |
+| `StyleRule`         | The rules a violation names: `dash`, `banned_phrase`, `invented_experience`, `emoji`, `hashtag`, `closing_question`, `length`, `unverified_number` (code) and `cliche`, `triplet`, `filler`, `opinion`, `unsupported_claim`, `ambiguous_reference` (critic; `invented_experience` too) |
+| `Violation`         | `rule`, `source` (`code` or `critic`), `part` (1-based or none), `excerpt` (from the text, none for length), `explanation` in Russian for the author |
+| `StyleReport`       | `violations`, `critic` (`checked`, `disabled`, `failed`), counters of critic findings dropped (excerpt not in the text), withdrawn and over the limit; `passed` is no violations |
+| `StyleResult`       | The `draft` that goes out, its `report`, `attempts` (versions evaluated), `chosen_attempt`, `regenerations` and `regeneration_failed` |
 
 ### Fact status
 
@@ -343,12 +463,16 @@ the domain rules in step 3: language editions of Wikipedia and its mirrors are o
 | Which facts contradict each other                       | Model      | Needs language understanding; code turns the mark into `disputed` |
 | Numbers and dates in the post occur among the facts     | Code       | Extraction and set comparison                            |
 | Every claim in the post is supported by a fact          | Model      | The critic reads the post against the facts              |
-| Dashes, banned phrases, emoji, hashtags, closing question | Code     | Exact patterns                                           |
-| Triplets, flat opening, uniform rhythm, invented experience | Model  | Cannot be reduced to a pattern reliably                  |
+| The critic's excerpt occurs in the post                 | Code       | Substring match after the quote normalisation            |
+| Dashes, banned phrases, emoji, hashtags, closing question | Code     | Exact patterns and stems, data in `app/config/style.py`  |
+| Cliches, rhetorical triplets, filler lines, opinions, ambiguous pronouns, unlisted invented experience | Model | Cannot be reduced to a pattern reliably |
+| Hook, rhythm, thread structure                          | Nobody     | Prompt and few-shot only, not checked                    |
+| Which version of a post goes out                        | Code       | Dangerous violations first, then the total               |
 | Post length against the configured limit                | Code       | Plain count                                              |
 
-A number the code cannot match to a fact is reported even if it happens to be correct. It is a
-warning in the draft, not a rejection: the author sees it next to the post and decides.
+A number the code cannot match to a fact is reported even if it happens to be correct. Step 5
+regenerates the post once it sees such a number; if the number survives the regenerations, the
+post still goes out with it listed, and the author decides.
 
 ## Failure behaviour
 
@@ -356,6 +480,9 @@ warning in the draft, not a rejection: the author sees it next to the post and d
 - Fewer than `FACTS_MIN_FACTS` facts that can be stated survive step 3: the step returns
   `InsufficientFacts`, the pipeline stops and says so. Do not write a post from the topic alone.
 - Fewer facts than a thread needs: say so and offer a short post.
+- The critic fails: the post goes out with the deterministic findings and `critic = failed`, and
+  the author is told the critic did not check it. A failed regeneration keeps the best version
+  already written. See step 5.
 - The provider for a step is unavailable: the error names the step and the provider. There is no
   silent fallback to the other provider, because that would change the cost and the voice
   without the author knowing.
