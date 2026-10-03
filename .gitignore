@@ -26,3 +26,4 @@ data/comparisons/
 .idea/
 .vscode/
 .DS_Store
+data/examples/*.md

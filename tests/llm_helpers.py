@@ -38,5 +38,34 @@ class ScriptedLLMClient:
             raise LLMInvalidResponseError("invalid json reply") from error
 
 
-def as_client(fake: ScriptedLLMClient) -> LLMClient:
+class RecordingLLMClient:
+    def __init__(self, inner: LLMClient) -> None:
+        self._inner = inner
+        self.prompts: list[list[Message]] = []
+
+    async def complete(
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float | None = None,
+        max_tokens: int,
+    ) -> LLMResult:
+        self.prompts.append(list(messages))
+        return await self._inner.complete(messages, temperature=temperature, max_tokens=max_tokens)
+
+    async def complete_json[T: BaseModel](
+        self,
+        messages: Sequence[Message],
+        schema: type[T],
+        *,
+        temperature: float | None = None,
+        max_tokens: int,
+    ) -> T:
+        self.prompts.append(list(messages))
+        return await self._inner.complete_json(
+            messages, schema, temperature=temperature, max_tokens=max_tokens
+        )
+
+
+def as_client(fake: ScriptedLLMClient | RecordingLLMClient) -> LLMClient:
     return fake

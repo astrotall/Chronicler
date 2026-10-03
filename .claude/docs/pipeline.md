@@ -200,7 +200,9 @@ job. An empty `FactSet` is a `ValueError` before any call.
 Known limits of the number check:
 
 - Roman numerals (`XIV век`) and numbers written in words (`двенадцать`) are not numbers for
-  `extract_numbers`. A post that writes them is not checked for them.
+  `extract_numbers`. A post that writes them is not checked for them. Style rule 15 asks the
+  writer for digits in dates, years, terms, sums, sizes, ages and percentages and forbids computed
+  intervals; small counts in words are allowed and stay unchecked.
 - Approximation is not understood: `около 300` matches a fact with `300`, and a fact with `около
   300` matches a post that states exactly `300`.
 - The limits of step 3 apply: `1.500` reads as 1500, a date with dots splits into `8.09` and the
@@ -215,7 +217,8 @@ links and emoji the two counts match; posts here have no emoji by rule 9.
 Input: a `Draft`. Output: an accepted `Draft`, or a regeneration request.
 
 - Deterministic checks first (cheap, exact): dashes, banned phrases, emoji, hashtags, a closing
-  question, structural tells. The full list is in [style-rules.md](style-rules.md).
+  question, structural tells. The full list is in [style-rules.md](style-rules.md). The dash check
+  catches only the em and en dash; a hyphen, spaced or not, passes.
 - Then the LLM critic (`style_critique`) judges what regexes cannot: triplets, a flat opening, a
   uniform rhythm, invented personal experience, tone drift from the few-shot examples.
 - On any violation the writer is called again with a list of exactly what to fix. At most 2

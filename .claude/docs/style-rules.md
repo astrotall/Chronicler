@@ -8,18 +8,26 @@ Posts are in Russian. This document is in English; the Russian examples are the 
 
 ## Voice
 
-1. **Russian, first person.** The post is written as the author, "я".
-2. **Opinions and judgements in first person are allowed.** "Мне кажется, это была ошибка." is
-   fine, as long as it is a judgement and not a claim of fact.
+1. **Russian, about the facts.** When the author speaks of themself it is in the first person,
+   "я", but the post is about the facts, not about the author. The rule used to say "write in the
+   first person", and the model read it as a request to put "я" into every post.
+2. **A first-person opinion is allowed, rarely.** At most `OPINION_MAX_PER_POST` (1) in a post or
+   in a whole thread, and a post may well have none. It is about what the facts show and reads as
+   a judgement, not a claim of fact: "Мне кажется, это была ошибка." It is never the habitual
+   closing line of a part: "Считаю, что прозвище здесь точнее любой летописной похвалы." after a
+   fact is the defect this rule exists for.
 3. **Invented personal experience is forbidden.** The author did not see, visit or witness
    anything the bot cannot know. Never "я видел", "я был там", "когда я стоял у этих стен",
    "мне довелось". The bot has facts and an opinion, not a biography.
 
 ## Punctuation
 
-4. **No long or medium dashes.** Neither the em dash (U+2014) nor the en dash (U+2013). Replace
-   with a full stop, a comma or a colon, whichever the sentence needs. A plain hyphen inside a
-   word ("кто-то", "юго-запад") is fine.
+4. **No long or medium dashes.** Neither the em dash (U+2014) nor the en dash (U+2013). Where
+   a dash is needed, write a hyphen with spaces, " - " (`DASH_REPLACEMENT` in
+   `app/config/style.py`). The spaced hyphen replaces a dash only: it does not stand in for a
+   comma, a full stop or a colon and is not a default punctuation mark. A hyphen inside a word
+   ("кто-то", "по-петровски") and in a range ("1320-1330") is fine. Only the characters in
+   `FORBIDDEN_DASHES` are a violation; a plain hyphen never is.
 
 ## Banned phrases
 
@@ -34,10 +42,11 @@ Posts are in Russian. This document is in English; the Russian examples are the 
 
    The list lives in config, not in code (see the no magic strings rule in
    [CLAUDE.md](../../CLAUDE.md)): `BANNED_PHRASES` in `app/config/style.py`, next to the
-   forbidden dashes, the known invented-experience phrases and the cautious wordings for disputed
-   facts. It is expected to grow. Adding a phrase is a change to that module only: the writing
-   prompt renders its rules block from it (`app/prompts/style_rules.py`, in Russian), and the
-   style filter reads the same data.
+   forbidden dashes, the known invented-experience phrases, the cautious wordings for disputed
+   facts, the opinion cap and the bad and good examples of rules 2, 4 and 13-15. It is expected
+   to grow. Adding a phrase or an example is a change to that module only: the writing prompt
+   renders its rules block from it (`app/prompts/style_rules.py`, in Russian), and the style
+   filter and the critic read the same data.
 
 ## Structure
 
@@ -68,6 +77,28 @@ Posts are in Russian. This document is in English; the Russian examples are the 
     | thread | A sequence of posts, each within the per-post limit from config         |
 
     The limits are config values. Code never hard-codes 25000 or the per-post limit.
+
+## Content
+
+These came from the first live drafts (HIS-21): every tweet ended with a line that commented on
+the fact before it, and the thread was one fact per tweet.
+
+13. **No filler sentences.** No sentence whose only job is to restate, comment on or rate the
+    previous one ("Это деталь, которая держит внимание даже спустя столетия."). If a sentence can
+    go and nothing is lost, it goes. A part may end on the fact itself.
+14. **No meaning the facts do not state.** No conclusion, cause, consequence or claim of
+    importance that is not among the facts ("Союзник не пришёл, и это решило многое."). The post
+    may choose facts, put them side by side and tell them vividly; the reader draws the
+    conclusion. The number check does not catch this, so it is also stated in the writing rules
+    as a "new claim".
+15. **Numbers in digits.** Dates, years, terms, sums, sizes, ages and percentages are written in
+    digits, as in the facts, so the number check sees them. Small counts, one to ten, may be words
+    in ordinary speech ("два войска", "четыре вагона"). An interval, term or count that no fact
+    states is never computed: "Через два года, в 1382 году" is forbidden when no fact says "2
+    years". Roman-numeral centuries ("XIV век") are left as they are and are not checked.
+16. **A thread is not "one fact per tweet, each with a closing line".** A tweet may be one plain
+    sentence, and related facts may share a tweet. A tweet is still never a fragment: it says who
+    and what it is about.
 
 ## Facts and style meet here
 
@@ -107,7 +138,11 @@ list and finds the next cliche. The main levers are few-shot examples and the cr
 | 6 triplets                                    | Critic, with a rough deterministic hint |
 | 7 hook                                        | Critic                               |
 | 8 rhythm                                      | Critic, with a deterministic sentence-length spread as a hint |
-| 1, 2 voice                                    | Few-shot and critic                  |
+| 1, 2 voice, opinion cap                       | Few-shot and critic                  |
+| 13 filler sentences                           | Critic                               |
+| 14 meaning beyond the facts                   | Critic, reading the post against the facts |
+| 15 numbers in digits                          | Deterministic for digits (the number check of step 4), critic for numbers in words |
+| 16 thread structure                           | Critic                               |
 
 A deterministic check is a hard gate. A critic finding is also a gate (it triggers a
 regeneration), but the critic is a model and can be wrong, so its verdict is shown to the author
@@ -120,8 +155,8 @@ for few-shot.
 
 Dash (rule 4):
 
-- Плохо: `Он выиграл битву — и проиграл войну.`
-- Хорошо: `Он выиграл битву и проиграл войну.`
+- Плохо: `Победа — это начало.`
+- Хорошо: `Победа - это начало.`
 
 Banned frame (rule 5):
 
@@ -137,6 +172,22 @@ Hook (rule 7):
 
 - Плохо: `Сегодня поговорим об одной интересной странице истории.`
 - Хорошо: `Мост взорвали за четыре минуты до подхода колонны. Диверсии не было: сапёр перепутал время.`
+
+Opinion as a closing line (rule 2):
+
+- Плохо: `После победы Дмитрий получил прозвище Донской. Считаю, что прозвище здесь точнее любой летописной похвалы.`
+- Хорошо: `После победы Дмитрий получил прозвище Донской.`
+
+Filler sentence and added meaning (rules 13, 14):
+
+- Плохо: `Мамай ждал Ягайло, но тот не успел к битве. Союзник не пришёл, и это решило многое.`
+- Хорошо: `Мамай ждал Ягайло, но тот не успел к битве.`
+
+Numbers (rule 15):
+
+- Плохо: `Через два года, в 1382 году, Тохтамыш сжёг Москву.`
+- Хорошо: `В 1382 году Тохтамыш сжёг Москву.`
+- Допустимо: `На поле сошлись два войска.`
 
 Rhythm (rule 8):
 

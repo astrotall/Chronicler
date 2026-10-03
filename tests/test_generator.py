@@ -1,7 +1,12 @@
 import json
 
 import pytest
-from app.config.style import BANNED_PHRASES
+from app.config.style import (
+    BANNED_PHRASES,
+    FILLER_CLOSER_EXAMPLES,
+    NUMBER_DIGITS_EXAMPLE,
+    OPINION_MAX_PER_POST,
+)
 from app.domain.draft import (
     Draft,
     DraftPart,
@@ -13,6 +18,7 @@ from app.domain.draft import (
 from app.domain.fact import Dispute, Fact, FactSet, FactStatus, SourceRef
 from app.domain.llm import Message, Role
 from app.llm.errors import LLMInvalidResponseError, LLMUnavailableError
+from app.prompts.style_rules import render_style_rules
 from app.services.generator import (
     SingleReply,
     ThreadReply,
@@ -485,6 +491,42 @@ async def test_style_rules_come_from_the_shared_config() -> None:
     for phrase in BANNED_PHRASES:
         assert phrase in system
     assert "по одним данным" in system
+
+
+@pytest.mark.parametrize("post_format", list(PostFormat))
+async def test_the_whole_rules_block_reaches_the_writer(post_format: PostFormat) -> None:
+    reply = thread("Первый.", "Второй.") if post_format is PostFormat.THREAD else single("Т.", "F1")
+    fake = ScriptedLLMClient(reply)
+
+    await write(fake, post_format)
+
+    system = system_text(fake.calls[0][0])
+    assert render_style_rules() in system
+    assert f"целиком: {OPINION_MAX_PER_POST}," in system
+    for example in FILLER_CLOSER_EXAMPLES:
+        assert example in system
+    assert NUMBER_DIGITS_EXAMPLE.good in system
+
+
+async def test_invented_meaning_counts_as_a_new_claim() -> None:
+    fake = ScriptedLLMClient(single("Текст.", "F1"))
+
+    await write(fake)
+
+    assert "a claim of importance that no fact states is such a new claim" in system_text(
+        fake.calls[0][0]
+    )
+
+
+async def test_thread_tweets_need_no_closer_but_are_never_fragments() -> None:
+    fake = ScriptedLLMClient(thread("Первый.", "Второй."))
+
+    await write(fake, PostFormat.THREAD)
+
+    system = system_text(fake.calls[0][0])
+    assert "needs no closing line of its own" in system
+    assert "it is never a fragment" in system
+    assert "reads on its own" not in system
 
 
 async def test_topic_is_a_frame_and_not_a_source() -> None:

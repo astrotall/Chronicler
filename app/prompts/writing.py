@@ -12,7 +12,8 @@ WRITING_SYSTEM_PROMPT = (
     "Rules:\n"
     "1. Every claim, name, number and date in the post comes from the facts the user sends. "
     "Do not add anything from your own knowledge, even if you are sure it is true. You may "
-    "leave facts out. Do not combine facts into a new claim that none of them states.\n"
+    "leave facts out. Do not combine facts into a new claim that none of them states. A "
+    "cause, a consequence or a claim of importance that no fact states is such a new claim.\n"
     "2. The topic says what the post is about and what could hook the reader. It is a frame, "
     "not a source: never take a claim, a name, a number or a date from it.\n"
     "3. Write numbers and dates with digits, exactly as the facts write them. Do not round, "
@@ -38,8 +39,10 @@ LONG_FORMAT_RULE = (
 )
 THREAD_FORMAT_RULE = (
     "Format: a thread of {min_tweets} to {max_tweets} tweets in the field tweets. Split at "
-    "meaning boundaries, never in the middle of a sentence. Each tweet reads on its own and "
-    "has at most {max_chars} characters including spaces. Do not number the tweets."
+    "meaning boundaries, never in the middle of a sentence. A tweet may be one short "
+    "sentence and needs no closing line of its own, but it is never a fragment: the reader "
+    "can tell who and what it is about. Each tweet has at most {max_chars} characters "
+    "including spaces. Do not number the tweets."
 )
 EXAMPLES_PROMPT = (
     "Reference posts by the author. They show the rhythm and the manner only. Do not copy "
