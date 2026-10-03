@@ -36,8 +36,7 @@ bot  ->  services  ->  llm
 5. **`bot` holds no business logic.** A handler parses input, calls one service function and
    formats the result.
 
-The direction is enforced by tooling once it exists (planned in HIS-2). Until then it is
-enforced by review.
+The direction is not checked by tooling yet. It is enforced by review.
 
 ## Where does this file go?
 
@@ -58,7 +57,9 @@ One interface, two providers. Services depend on the interface, never on a provi
 
 ```python
 class LLMClient(Protocol):
-    async def complete(self, messages: Sequence[Message], *, temperature: float | None = None) -> str: ...
+    async def complete(
+        self, messages: Sequence[Message], *, temperature: float | None = None
+    ) -> str: ...
 
     async def complete_json[T: BaseModel](
         self, messages: Sequence[Message], response_model: type[T]

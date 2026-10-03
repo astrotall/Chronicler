@@ -1,0 +1,5 @@
+ENV_FILE = ".env"
+ENV_FILE_ENCODING = "utf-8"
+OWNER_IDS_SEPARATOR = ","
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+CONFIG_ERROR_HEADER = "Invalid configuration, check the environment and the .env file:"
