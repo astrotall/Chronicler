@@ -1,60 +1,25 @@
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 
 import httpx
 import pytest
 import respx
 from app.config.constants import LLMStep
-from app.domain.llm import LLMResult, Message, Role
-from app.llm.client import LLMClient
+from app.domain.llm import Role
 from app.llm.errors import LLMInvalidResponseError, LLMUnavailableError
 from app.llm.factory import LLMClientFactory
 from app.prompts.query_planning import render_query_planning
 from app.services.query_planning import QueryPlan, plan_queries
-from pydantic import BaseModel, ValidationError
+
+from llm_helpers import ScriptedLLMClient, as_client
 
 TOPIC = "Куликовская битва"
 VALID = ["Куликовская битва 1380", "Battle of Kulikovo", "Мамай и Дмитрий Донской"]
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 
-class FakeLLMClient:
-    def __init__(self, reply: object) -> None:
-        self._reply = reply
-        self.calls: list[tuple[Sequence[Message], type[BaseModel], int]] = []
-
-    async def complete(
-        self,
-        messages: Sequence[Message],
-        *,
-        temperature: float | None = None,
-        max_tokens: int,
-    ) -> LLMResult:
-        raise NotImplementedError
-
-    async def complete_json[T: BaseModel](
-        self,
-        messages: Sequence[Message],
-        schema: type[T],
-        *,
-        temperature: float | None = None,
-        max_tokens: int,
-    ) -> T:
-        self.calls.append((messages, schema, max_tokens))
-        if isinstance(self._reply, Exception):
-            raise self._reply
-        try:
-            return schema.model_validate(self._reply)
-        except ValidationError as error:
-            raise LLMInvalidResponseError("invalid json reply") from error
-
-
-def as_client(fake: FakeLLMClient) -> LLMClient:
-    return fake
-
-
 async def test_valid_plan_returns_the_queries() -> None:
-    fake = FakeLLMClient({"queries": VALID})
+    fake = ScriptedLLMClient({"queries": VALID})
 
     assert await plan_queries(as_client(fake), TOPIC) == VALID
 
@@ -63,11 +28,11 @@ async def test_valid_plan_returns_the_queries() -> None:
 async def test_three_to_five_queries_are_accepted(count: int) -> None:
     queries = [f"запрос {number}" for number in range(count)]
 
-    assert await plan_queries(as_client(FakeLLMClient({"queries": queries})), TOPIC) == queries
+    assert await plan_queries(as_client(ScriptedLLMClient({"queries": queries})), TOPIC) == queries
 
 
 async def test_queries_are_stripped() -> None:
-    fake = FakeLLMClient({"queries": ["  один ", "два\n", "\tthree"]})
+    fake = ScriptedLLMClient({"queries": ["  один ", "два\n", "\tthree"]})
 
     assert await plan_queries(as_client(fake), TOPIC) == ["один", "два", "three"]
 
@@ -101,13 +66,13 @@ async def test_queries_are_stripped() -> None:
 )
 async def test_invalid_plan_raises_invalid_response(queries: list[object]) -> None:
     with pytest.raises(LLMInvalidResponseError):
-        await plan_queries(as_client(FakeLLMClient({"queries": queries})), TOPIC)
+        await plan_queries(as_client(ScriptedLLMClient({"queries": queries})), TOPIC)
 
 
 @pytest.mark.parametrize("reply", [{}, {"queries": "один, два, три"}, ["один"], "text", None])
 async def test_wrong_reply_shape_raises_invalid_response(reply: object) -> None:
     with pytest.raises(LLMInvalidResponseError):
-        await plan_queries(as_client(FakeLLMClient(reply)), TOPIC)
+        await plan_queries(as_client(ScriptedLLMClient(reply)), TOPIC)
 
 
 @pytest.mark.parametrize(
@@ -116,14 +81,14 @@ async def test_wrong_reply_shape_raises_invalid_response(reply: object) -> None:
 )
 async def test_llm_errors_propagate_unchanged(error: Exception) -> None:
     with pytest.raises(type(error)) as raised:
-        await plan_queries(as_client(FakeLLMClient(error)), TOPIC)
+        await plan_queries(as_client(ScriptedLLMClient(error)), TOPIC)
 
     assert raised.value is error
 
 
 @pytest.mark.parametrize("topic", ["", "   ", "\n\t"])
 async def test_blank_topic_is_rejected_before_calling_the_llm(topic: str) -> None:
-    fake = FakeLLMClient({"queries": VALID})
+    fake = ScriptedLLMClient({"queries": VALID})
 
     with pytest.raises(ValueError, match="topic"):
         await plan_queries(as_client(fake), topic)
@@ -132,7 +97,7 @@ async def test_blank_topic_is_rejected_before_calling_the_llm(topic: str) -> Non
 
 
 async def test_request_carries_the_topic_the_schema_and_a_token_budget() -> None:
-    fake = FakeLLMClient({"queries": VALID})
+    fake = ScriptedLLMClient({"queries": VALID})
 
     await plan_queries(as_client(fake), f"  {TOPIC} \n")
 

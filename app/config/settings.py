@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
@@ -11,6 +12,8 @@ from app.config.constants import (
     DEEPSEEK_DEFAULT_MODEL,
     ENV_FILE,
     ENV_FILE_ENCODING,
+    EXAMPLES_DEFAULT_DIR,
+    EXAMPLES_DEFAULT_MAX,
     FACTS_DEFAULT_DOMAIN_GROUPS,
     FACTS_DEFAULT_INPUT_MAX_CHARS,
     FACTS_DEFAULT_MAX_FACTS,
@@ -18,16 +21,22 @@ from app.config.constants import (
     FACTS_DEFAULT_MIN_QUOTE_CHARS,
     FACTS_DOMAIN_GROUPS_SEPARATOR,
     FACTS_DOMAIN_MEMBERS_SEPARATOR,
+    LONG_DEFAULT_MAX_CHARS,
     OWNER_IDS_SEPARATOR,
     RESEARCH_DEFAULT_CONNECT_TIMEOUT_SECONDS,
     RESEARCH_DEFAULT_MAX_CONCURRENCY,
     RESEARCH_DEFAULT_READ_TIMEOUT_SECONDS,
     RESEARCH_DEFAULT_SNIPPET_MAX_CHARS,
     RESEARCH_DOMAINS_SEPARATOR,
+    SHORT_DEFAULT_MAX_CHARS,
     TAVILY_DEFAULT_CHUNKS_PER_SOURCE,
     TAVILY_DEFAULT_MAX_RESULTS,
     TAVILY_MAX_CHUNKS_PER_SOURCE,
     TAVILY_MAX_RESULTS_LIMIT,
+    THREAD_DEFAULT_MAX_TWEETS,
+    THREAD_MIN_TWEETS,
+    THREAD_NUMBERING_TEMPLATE,
+    THREAD_TWEET_DEFAULT_MAX_CHARS,
     WIKIPEDIA_DEFAULT_EXTRACT_MAX_CHARS,
     WIKIPEDIA_DEFAULT_MAX_ARTICLES,
     LLMProvider,
@@ -115,6 +124,15 @@ class Settings(BaseSettings):
         default_factory=lambda: [list(group) for group in FACTS_DEFAULT_DOMAIN_GROUPS]
     )
 
+    short_max_chars: int = Field(default=SHORT_DEFAULT_MAX_CHARS, ge=1)
+    long_max_chars: int = Field(default=LONG_DEFAULT_MAX_CHARS, ge=1)
+    thread_tweet_max_chars: int = Field(default=THREAD_TWEET_DEFAULT_MAX_CHARS, ge=1)
+    thread_max_tweets: int = Field(default=THREAD_DEFAULT_MAX_TWEETS, ge=THREAD_MIN_TWEETS)
+    thread_numbering: bool = False
+
+    examples_dir: Path = Path(EXAMPLES_DEFAULT_DIR)
+    examples_max: int = Field(default=EXAMPLES_DEFAULT_MAX, ge=0)
+
     @field_validator("owner_telegram_ids", mode="before")
     @classmethod
     def split_owner_ids(cls, value: object) -> object:
@@ -150,6 +168,13 @@ class Settings(BaseSettings):
     def require_facts_range(self) -> Self:
         if self.facts_min_facts > self.facts_max_facts:
             raise ValueError("FACTS_MIN_FACTS must not exceed FACTS_MAX_FACTS")
+        return self
+
+    @model_validator(mode="after")
+    def require_room_for_numbering(self) -> Self:
+        prefix = THREAD_NUMBERING_TEMPLATE.format(index=self.thread_max_tweets)
+        if self.thread_numbering and len(prefix) >= self.thread_tweet_max_chars:
+            raise ValueError("THREAD_TWEET_MAX_CHARS must leave room for the tweet numbering")
         return self
 
     @field_validator("log_level", mode="before")

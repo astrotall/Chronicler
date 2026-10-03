@@ -144,3 +144,57 @@ def test_facts_minimum_above_maximum_is_an_error(monkeypatch: pytest.MonkeyPatch
 def test_facts_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     with pytest.raises(ValidationError):
         facts_env(monkeypatch, **{name: "0"})
+
+
+def test_writing_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = facts_env(monkeypatch)
+
+    assert settings.short_max_chars == 280
+    assert settings.long_max_chars == 25000
+    assert settings.thread_tweet_max_chars == 280
+    assert settings.thread_max_tweets == 12
+    assert settings.thread_numbering is False
+    assert settings.examples_dir == Path("data/examples")
+    assert settings.examples_max == 3
+
+
+def test_writing_settings_are_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = facts_env(
+        monkeypatch,
+        SHORT_MAX_CHARS="200",
+        THREAD_MAX_TWEETS="5",
+        THREAD_NUMBERING="true",
+        EXAMPLES_DIR="/tmp/posts",
+        EXAMPLES_MAX="0",
+    )
+
+    assert settings.short_max_chars == 200
+    assert settings.thread_max_tweets == 5
+    assert settings.thread_numbering is True
+    assert settings.examples_dir == Path("/tmp/posts")
+    assert settings.examples_max == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("SHORT_MAX_CHARS", "0"),
+        ("LONG_MAX_CHARS", "0"),
+        ("THREAD_TWEET_MAX_CHARS", "0"),
+        ("THREAD_MAX_TWEETS", "1"),
+        ("EXAMPLES_MAX", "-1"),
+    ],
+)
+def test_writing_limits_out_of_range_are_an_error(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    with pytest.raises(ValidationError):
+        facts_env(monkeypatch, **{name: value})
+
+
+def test_numbering_must_fit_into_the_tweet_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValidationError, match="THREAD_TWEET_MAX_CHARS"):
+        facts_env(monkeypatch, THREAD_NUMBERING="true", THREAD_TWEET_MAX_CHARS="4")
+
+    monkeypatch.setenv("THREAD_NUMBERING", "false")
+    assert facts_env(monkeypatch, THREAD_TWEET_MAX_CHARS="4").thread_tweet_max_chars == 4

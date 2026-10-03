@@ -1,0 +1,259 @@
+import logging
+from collections.abc import Sequence
+from typing import Annotated, Self
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+
+from app.config.constants import (
+    THREAD_MIN_TWEETS,
+    THREAD_NUMBERING_TEMPLATE,
+    WRITING_LENGTH_RETRIES,
+    WRITING_LONG_MAX_TOKENS,
+    WRITING_SHORT_MAX_TOKENS,
+    WRITING_THREAD_MAX_TOKENS,
+)
+from app.config.settings import Settings
+from app.domain.draft import (
+    Draft,
+    DraftPart,
+    LengthIssue,
+    LengthViolation,
+    PostFormat,
+    Revision,
+)
+from app.domain.fact import FactSet
+from app.domain.llm import Message, Role
+from app.llm.client import LLMClient
+from app.prompts.writing import render_length_correction, render_writing
+from app.services.facts import normalize_label
+from app.services.quote_check import extract_numbers
+
+logger = logging.getLogger(__name__)
+
+type ReplyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+MAX_TOKENS: dict[PostFormat, int] = {
+    PostFormat.SHORT: WRITING_SHORT_MAX_TOKENS,
+    PostFormat.LONG: WRITING_LONG_MAX_TOKENS,
+    PostFormat.THREAD: WRITING_THREAD_MAX_TOKENS,
+}
+
+
+class SingleReply(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    fact_ids: list[str]
+    text: ReplyText
+
+
+class ThreadReply(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    fact_ids: list[str]
+    tweets: list[ReplyText] = Field(min_length=THREAD_MIN_TWEETS)
+
+
+type WritingReply = SingleReply | ThreadReply
+
+
+def numbering_prefix(index: int) -> str:
+    return THREAD_NUMBERING_TEMPLATE.format(index=index)
+
+
+class WritingLimits(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    short_max_chars: int = Field(ge=1)
+    long_max_chars: int = Field(ge=1)
+    thread_tweet_max_chars: int = Field(ge=1)
+    thread_max_tweets: int = Field(ge=THREAD_MIN_TWEETS)
+    thread_numbering: bool = False
+
+    @model_validator(mode="after")
+    def require_room_for_numbering(self) -> Self:
+        if self.text_max_chars(PostFormat.THREAD) < 1:
+            raise ValueError("the tweet limit must leave room for the numbering")
+        return self
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> Self:
+        return cls(
+            short_max_chars=settings.short_max_chars,
+            long_max_chars=settings.long_max_chars,
+            thread_tweet_max_chars=settings.thread_tweet_max_chars,
+            thread_max_tweets=settings.thread_max_tweets,
+            thread_numbering=settings.thread_numbering,
+        )
+
+    def part_max_chars(self, post_format: PostFormat) -> int:
+        match post_format:
+            case PostFormat.SHORT:
+                return self.short_max_chars
+            case PostFormat.LONG:
+                return self.long_max_chars
+            case PostFormat.THREAD:
+                return self.thread_tweet_max_chars
+
+    def numbered(self, post_format: PostFormat) -> bool:
+        return post_format is PostFormat.THREAD and self.thread_numbering
+
+    def text_max_chars(self, post_format: PostFormat) -> int:
+        reserved = (
+            len(numbering_prefix(self.thread_max_tweets)) if self.numbered(post_format) else 0
+        )
+        return self.part_max_chars(post_format) - reserved
+
+
+def reply_texts(reply: WritingReply) -> list[str]:
+    match reply:
+        case ThreadReply():
+            return list(reply.tweets)
+        case SingleReply():
+            return [reply.text]
+
+
+def build_parts(
+    texts: Sequence[str], post_format: PostFormat, limits: WritingLimits
+) -> list[DraftPart]:
+    if not limits.numbered(post_format):
+        return [DraftPart(text=text) for text in texts]
+    return [
+        DraftPart(text=text, prefix=numbering_prefix(index))
+        for index, text in enumerate(texts, start=1)
+    ]
+
+
+def check_length(
+    parts: Sequence[DraftPart], post_format: PostFormat, limits: WritingLimits
+) -> list[LengthViolation]:
+    limit = limits.part_max_chars(post_format)
+    violations = [
+        LengthViolation(
+            issue=LengthIssue.PART_TOO_LONG, part=index, actual=len(part.rendered), limit=limit
+        )
+        for index, part in enumerate(parts, start=1)
+        if len(part.rendered) > limit
+    ]
+    if post_format is PostFormat.THREAD and len(parts) > limits.thread_max_tweets:
+        violations.append(
+            LengthViolation(
+                issue=LengthIssue.TOO_MANY_PARTS,
+                actual=len(parts),
+                limit=limits.thread_max_tweets,
+            )
+        )
+    return violations
+
+
+def text_violations(
+    parts: Sequence[DraftPart], violations: Sequence[LengthViolation]
+) -> list[LengthViolation]:
+    adjusted: list[LengthViolation] = []
+    for violation in violations:
+        if violation.part is None:
+            adjusted.append(violation)
+            continue
+        prefix = len(parts[violation.part - 1].prefix)
+        adjusted.append(
+            violation.model_copy(
+                update={"actual": violation.actual - prefix, "limit": violation.limit - prefix}
+            )
+        )
+    return adjusted
+
+
+def collect_fact_ids(reported: Sequence[str], fact_set: FactSet) -> tuple[list[str], int]:
+    known = {fact.id for fact in fact_set.facts}
+    used: list[str] = []
+    unknown = 0
+    for label in reported:
+        fact_id = normalize_label(label)
+        if fact_id not in known:
+            unknown += 1
+        elif fact_id not in used:
+            used.append(fact_id)
+    return used, unknown
+
+
+def number_order(number: str) -> tuple[float, str]:
+    return float(number), number
+
+
+def unverified_numbers(texts: Sequence[str], fact_set: FactSet) -> list[str]:
+    available: set[str] = set()
+    for fact in fact_set.facts:
+        available |= extract_numbers(fact.text)
+    found: set[str] = set()
+    for text in texts:
+        found |= extract_numbers(text)
+    return sorted(found - available, key=number_order)
+
+
+async def request_reply(
+    client: LLMClient, messages: Sequence[Message], post_format: PostFormat
+) -> WritingReply:
+    max_tokens = MAX_TOKENS[post_format]
+    if post_format is PostFormat.THREAD:
+        return await client.complete_json(messages, ThreadReply, max_tokens=max_tokens)
+    return await client.complete_json(messages, SingleReply, max_tokens=max_tokens)
+
+
+async def write_draft(
+    client: LLMClient,
+    fact_set: FactSet,
+    post_format: PostFormat,
+    limits: WritingLimits,
+    examples: Sequence[str] = (),
+    *,
+    angle: str | None = None,
+    revision: Revision | None = None,
+) -> Draft:
+    if not fact_set.facts:
+        raise ValueError("fact set must not be empty")
+    framing = angle.strip() if angle is not None and angle.strip() else None
+    messages = render_writing(
+        fact_set,
+        post_format,
+        max_chars=limits.text_max_chars(post_format),
+        max_tweets=limits.thread_max_tweets,
+        examples=examples,
+        angle=framing,
+        revision=revision,
+    )
+    reply = await request_reply(client, messages, post_format)
+    attempts = 1
+    parts = build_parts(reply_texts(reply), post_format, limits)
+    violations = check_length(parts, post_format, limits)
+    for _ in range(WRITING_LENGTH_RETRIES):
+        if not violations:
+            break
+        messages = [
+            *messages,
+            Message(role=Role.ASSISTANT, content=reply.model_dump_json()),
+            render_length_correction(text_violations(parts, violations)),
+        ]
+        reply = await request_reply(client, messages, post_format)
+        attempts += 1
+        parts = build_parts(reply_texts(reply), post_format, limits)
+        violations = check_length(parts, post_format, limits)
+    used, unknown = collect_fact_ids(reply.fact_ids, fact_set)
+    draft = Draft(
+        post_format=post_format,
+        parts=parts,
+        used_fact_ids=used,
+        unverified_numbers=unverified_numbers([part.text for part in parts], fact_set),
+        length_violations=violations,
+        attempts=attempts,
+    )
+    logger.info(
+        "draft written format=%s parts=%d used_facts=%d unknown_fact_ids=%d "
+        "unverified_numbers=%d length_violations=%d attempts=%d",
+        post_format,
+        len(draft.parts),
+        len(used),
+        unknown,
+        len(draft.unverified_numbers),
+        len(violations),
+        attempts,
+    )
+    return draft

@@ -19,8 +19,10 @@ verifies the links in between.
    occurs in its quotes; what fails is dropped. Code marks a fact `confirmed` (2+ independent
    domains) or `single`, a second model pass finds contradictions, and those facts become
    `disputed`. Too few facts is a result shown to the author, not a guess.
-4. **Write.** The model writes the post strictly from the facts. Code checks that every number
-   and date in the post appears among the facts.
+4. **Write.** The model writes a short post, a long post or a thread strictly from the facts; the
+   topic only frames the post. Disputed facts are shown to the model apart and written
+   cautiously. Code checks the length (one retry, then the draft is marked, never cut) and warns
+   about every number in the post that is not among the facts.
 5. **Filter style.** Deterministic style checks, then an LLM critic pass. On a violation the post
    is regenerated with a note on what to fix, up to 2 attempts.
 6. **Deliver.** Telegram receives the post, the facts with their sources underneath, and the
@@ -51,8 +53,8 @@ data/
 At the moment `app/` holds settings, an owner-only bot with `/start` and a stub for plain text,
 the LLM client (`app/llm`, DeepSeek and Anthropic), the research sources (`app/research`,
 Wikipedia and Tavily), query planning, the research orchestrator and fact extraction
-(`app/services`). The writing and style steps are not built yet, and the bot does not run the
-pipeline yet.
+(`app/services`), and the writing step with the few-shot loader. The style step is not built yet,
+and the bot does not run the pipeline yet.
 
 ## Running
 
@@ -176,6 +178,31 @@ verified facts come out; it needs `DEEPSEEK_API_KEY`:
 
 ```bash
 uv run pytest tests/test_facts_live.py -m integration -o log_cli=true --log-cli-level=INFO
+```
+
+### Writing
+
+| Variable                  | Meaning                                                                  |
+| ------------------------- | ------------------------------------------------------------------------ |
+| `SHORT_MAX_CHARS`         | Longest short post, 280 by default                                       |
+| `LONG_MAX_CHARS`          | Longest long post, 25000 by default (X Premium)                          |
+| `THREAD_TWEET_MAX_CHARS`  | Longest tweet of a thread, numbering included, 280 by default            |
+| `THREAD_MAX_TWEETS`       | Most tweets in a thread, 12 by default, at least 2                       |
+| `THREAD_NUMBERING`        | `true` adds `1/ `, `2/ `... before each tweet, default `false`           |
+| `EXAMPLES_DIR`            | Folder with reference posts, `data/examples` by default                  |
+| `EXAMPLES_MAX`            | Most reference posts in a prompt, 3 by default; `0` turns them off       |
+
+Reference posts are `.md` files in `EXAMPLES_DIR`, one post per file, taken in name order. The
+folder may be empty: the post is then written without examples. Lengths are counted as Python
+`len()`; X counts a link as 23 characters and an emoji as 2, so a post with links can be shorter
+on X than the count says.
+
+The live test writes a short post and a thread from a small hand-made fact set with DeepSeek,
+checks only their structure, and saves the drafts to `data/comparisons/generator_live.json` (not
+committed); it needs `DEEPSEEK_API_KEY`:
+
+```bash
+uv run pytest tests/test_generator_live.py -m integration -o log_cli=true --log-cli-level=INFO
 ```
 
 ## Before committing

@@ -30,7 +30,7 @@ Do not revisit these without an explicit instruction from the user.
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | Users             | One user. Access by a whitelist of Telegram IDs.                                                                               | No multi-user code, no accounts, no per-user settings. Messages from any other ID are ignored.                      |
 | Publishing to X   | The bot never publishes. There is no X client code.                                                                            | Do not add an X API dependency, token or module. The author publishes by hand.                                      |
-| Source of text    | A post is written only from a list of facts with sources.                                                                      | The writing step receives facts, not the raw topic or raw snippets. Numbers and dates are verified against facts.   |
+| Source of text    | A post is written only from a list of facts with sources.                                                                      | The writing step receives facts, never raw snippets. The topic is a frame, not a source. Numbers and dates are verified against facts. |
 | LLM providers     | Anthropic and DeepSeek behind one interface. The provider is chosen by config separately for each pipeline step. Start with DeepSeek. | Steps: `query_planning`, `fact_extraction`, `writing`, `style_critique`. Switching a step is a config change only.  |
 | Storage           | No database first, then SQLite.                                                                                                | Early iterations keep state in memory and in files. `app/db` appears later and uses SQLite.                         |
 | Deferred infra    | PostgreSQL, Redis, Arq, Alembic and Docker are not used until a concrete task needs them.                                      | Do not add them, do not write code "ready for" them. Each needs its own ticket with a stated reason.                |
@@ -81,8 +81,11 @@ added the LLM client in `app/llm` with its models in `app/domain/llm.py` and the
 in `app/prompts/json_reply.py`. HIS-4 added the research sources in `app/research` and, in
 `app/services`, query planning and the research orchestrator. HIS-5 added fact extraction in
 `app/services/facts.py` with the quote check and the source domain rules beside it, and its models
-in `app/domain/fact.py`. The writing, style and delivery steps are not built yet, and the bot does
-not run the pipeline yet. `db` does not exist yet.
+in `app/domain/fact.py`. HIS-6 added the writing step in `app/services/generator.py`, the few-shot
+loader in `app/services/style.py`, the `Draft` models in `app/domain/draft.py`, the style rule data
+in `app/config/style.py` and the prompts in `app/prompts/writing.py` and
+`app/prompts/style_rules.py`. The style filter and delivery steps are not built yet, and the bot
+does not run the pipeline yet. `db` does not exist yet.
 
 ## Detailed guides
 

@@ -33,7 +33,11 @@ Posts are in Russian. This document is in English; the Russian examples are the 
    - "знали ли вы"
 
    The list lives in config, not in code (see the no magic strings rule in
-   [CLAUDE.md](../../CLAUDE.md)). It is expected to grow. Adding a phrase is a config change.
+   [CLAUDE.md](../../CLAUDE.md)): `BANNED_PHRASES` in `app/config/style.py`, next to the
+   forbidden dashes, the known invented-experience phrases and the cautious wordings for disputed
+   facts. It is expected to grow. Adding a phrase is a change to that module only: the writing
+   prompt renders its rules block from it (`app/prompts/style_rules.py`, in Russian), and the
+   style filter reads the same data.
 
 ## Structure
 
@@ -59,7 +63,7 @@ Posts are in Russian. This document is in English; the Russian examples are the 
 
     | Shape  | Meaning                                                                 |
     | ------ | ----------------------------------------------------------------------- |
-    | short  | A short post, the default                                               |
+    | short  | A short post, the default. The limit is in config, 280 characters by default |
     | long   | A long single post. The limit is in config, 25000 characters by default (X Premium) |
     | thread | A sequence of posts, each within the per-post limit from config         |
 
@@ -78,7 +82,8 @@ sources disagree. Do it in a plain sentence, not with a formula from the banned 
 
 The author's voice is set mainly by examples, not by rules.
 
-- Reference posts are plain text files in `data/examples/`, one post per file.
+- Reference posts are Markdown files (`*.md`) in `data/examples/`, one post per file. Hidden
+  files, `.gitkeep`, other extensions and empty files are ignored.
 - **At the start there are none.** The mechanism must work with an empty set: with no examples
   the writing prompt simply omits the examples block, and nothing fails.
 - The number of examples included in a prompt is a config value. Selection (all, the most recent,
