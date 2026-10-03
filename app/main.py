@@ -10,6 +10,7 @@ from app.config.constants import CONFIG_ERROR_HEADER, LOG_FORMAT
 from app.config.settings import Settings
 from app.llm.errors import LLMConfigError
 from app.llm.factory import validate_provider_keys
+from app.research.factory import log_source_availability
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ def load_settings() -> Settings:
 def main() -> None:
     settings = load_settings()
     logging.basicConfig(level=settings.log_level, format=LOG_FORMAT)
+    log_source_availability(settings)
     asyncio.run(run(settings))
 
 

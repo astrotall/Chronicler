@@ -46,8 +46,9 @@ data/
 ```
 
 At the moment `app/` holds settings, an owner-only bot with `/start` and a stub for plain text,
-and the LLM client (`app/llm`, DeepSeek and Anthropic). `research` and `services` are empty
-packages that later tickets fill.
+the LLM client (`app/llm`, DeepSeek and Anthropic), the research sources (`app/research`,
+Wikipedia and Tavily), query planning and the research orchestrator (`app/services`). The facts,
+writing and style steps are not built yet.
 
 ## Running
 
@@ -110,6 +111,45 @@ Live tests send a short real request to each provider whose key is set (from the
 
 ```bash
 uv run pytest -m integration
+```
+
+### Research sources
+
+The research step searches Wikipedia ru, Wikipedia en and Tavily. Each source is optional and is
+switched on by its own setting. A source whose setting is empty (or only spaces) is off, the bot
+logs a warning naming the variable, and the other sources keep working.
+
+| Variable                       | Meaning                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `WIKIPEDIA_CONTACT`            | Your email or a page URL. Empty means Wikipedia is off              |
+| `TAVILY_API_KEY`               | Tavily key. Empty means Tavily is off                                |
+| `WIKIPEDIA_MAX_ARTICLES`       | Articles read per query and edition, 2 by default                    |
+| `WIKIPEDIA_EXTRACT_MAX_CHARS`  | Length of one article's text, 6000 by default                        |
+| `TAVILY_SEARCH_DEPTH`          | `basic` (1 credit, default), `advanced` (2 credits), `fast`, `ultra-fast` |
+| `TAVILY_MAX_RESULTS`           | Results per query, 5 by default, at most 20                          |
+| `TAVILY_CHUNKS_PER_SOURCE`     | Chunks per page, 1 to 3, 3 by default. Not sent for `ultra-fast`     |
+| `RESEARCH_MAX_CONCURRENCY`     | Searches in flight at once, 5 by default                             |
+| `RESEARCH_SNIPPET_MAX_CHARS`   | Longest snippet kept, 8000 by default                                |
+| `RESEARCH_ALLOWED_DOMAINS`     | Comma-separated. If not empty, only these domains and their subdomains stay |
+| `RESEARCH_BLOCKED_DOMAINS`     | Comma-separated. These domains and their subdomains are dropped      |
+| `RESEARCH_CONNECT_TIMEOUT_SECONDS`, `RESEARCH_READ_TIMEOUT_SECONDS` | HTTP timeouts            |
+
+**Wikipedia.** It needs no key, but the Wikimedia User-Agent policy asks every client to say who
+runs it. Put your email or the URL of a page about you into `WIKIPEDIA_CONTACT`; it is sent in the
+`User-Agent` header and nowhere else. Leave it empty and Wikipedia stays off.
+
+**Tavily.** Sign up at [tavily.com](https://tavily.com), copy the key (it starts with `tvly-`) from
+the dashboard into `TAVILY_API_KEY`. The free plan has a monthly credit allowance; with the default
+`basic` depth one query costs 1 credit, so one topic costs up to 5. Without the key only Wikipedia
+works.
+
+The domain lists apply to every source, so an allow-list that does not include `wikipedia.org`
+also drops the Wikipedia snippets.
+
+Live tests call Wikipedia (no key needed) and, if `TAVILY_API_KEY` is set, Tavily:
+
+```bash
+uv run pytest tests/test_research_live.py -m integration
 ```
 
 ## Before committing

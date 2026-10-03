@@ -12,8 +12,20 @@ from app.config.constants import (
     ENV_FILE,
     ENV_FILE_ENCODING,
     OWNER_IDS_SEPARATOR,
+    RESEARCH_DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    RESEARCH_DEFAULT_MAX_CONCURRENCY,
+    RESEARCH_DEFAULT_READ_TIMEOUT_SECONDS,
+    RESEARCH_DEFAULT_SNIPPET_MAX_CHARS,
+    RESEARCH_DOMAINS_SEPARATOR,
+    TAVILY_DEFAULT_CHUNKS_PER_SOURCE,
+    TAVILY_DEFAULT_MAX_RESULTS,
+    TAVILY_MAX_CHUNKS_PER_SOURCE,
+    TAVILY_MAX_RESULTS_LIMIT,
+    WIKIPEDIA_DEFAULT_EXTRACT_MAX_CHARS,
+    WIKIPEDIA_DEFAULT_MAX_ARTICLES,
     LLMProvider,
     LLMStep,
+    TavilySearchDepth,
 )
 
 type LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -64,11 +76,43 @@ class Settings(BaseSettings):
     llm_retry_max_delay_seconds: float = Field(default=30.0, ge=0)
     llm_json_max_retries: int = Field(default=2, ge=0)
 
+    wikipedia_contact: str | None = None
+    wikipedia_max_articles: int = Field(default=WIKIPEDIA_DEFAULT_MAX_ARTICLES, ge=1)
+    wikipedia_extract_max_chars: int = Field(default=WIKIPEDIA_DEFAULT_EXTRACT_MAX_CHARS, ge=1)
+
+    tavily_api_key: SecretStr | None = None
+    tavily_search_depth: TavilySearchDepth = TavilySearchDepth.BASIC
+    tavily_max_results: int = Field(
+        default=TAVILY_DEFAULT_MAX_RESULTS, ge=1, le=TAVILY_MAX_RESULTS_LIMIT
+    )
+    tavily_chunks_per_source: int = Field(
+        default=TAVILY_DEFAULT_CHUNKS_PER_SOURCE, ge=1, le=TAVILY_MAX_CHUNKS_PER_SOURCE
+    )
+
+    research_connect_timeout_seconds: float = Field(
+        default=RESEARCH_DEFAULT_CONNECT_TIMEOUT_SECONDS, gt=0
+    )
+    research_read_timeout_seconds: float = Field(
+        default=RESEARCH_DEFAULT_READ_TIMEOUT_SECONDS, gt=0
+    )
+    research_max_concurrency: int = Field(default=RESEARCH_DEFAULT_MAX_CONCURRENCY, ge=1)
+    research_snippet_max_chars: int = Field(default=RESEARCH_DEFAULT_SNIPPET_MAX_CHARS, ge=1)
+    research_allowed_domains: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    research_blocked_domains: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
     @field_validator("owner_telegram_ids", mode="before")
     @classmethod
     def split_owner_ids(cls, value: object) -> object:
         if isinstance(value, str):
             parts = (part.strip() for part in value.split(OWNER_IDS_SEPARATOR))
+            return [part for part in parts if part]
+        return value
+
+    @field_validator("research_allowed_domains", "research_blocked_domains", mode="before")
+    @classmethod
+    def split_domains(cls, value: object) -> object:
+        if isinstance(value, str):
+            parts = (part.strip().lower() for part in value.split(RESEARCH_DOMAINS_SEPARATOR))
             return [part for part in parts if part]
         return value
 
@@ -84,6 +128,7 @@ class Settings(BaseSettings):
         "llm_fact_extraction_provider",
         "llm_writing_provider",
         "llm_style_critique_provider",
+        "tavily_search_depth",
         mode="before",
     )
     @classmethod
@@ -95,6 +140,8 @@ class Settings(BaseSettings):
     @field_validator(
         "deepseek_api_key",
         "anthropic_api_key",
+        "tavily_api_key",
+        "wikipedia_contact",
         "llm_query_planning_model",
         "llm_fact_extraction_model",
         "llm_writing_model",

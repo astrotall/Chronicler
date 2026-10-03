@@ -47,3 +47,79 @@ ANTHROPIC_SYSTEM_SEPARATOR = "\n\n"
 RETRY_AFTER_HEADER = "retry-after"
 CONTENT_TYPE_HEADER = "content-type"
 JSON_CONTENT_TYPE = "application/json"
+
+
+class WikipediaLanguage(StrEnum):
+    RU = "ru"
+    EN = "en"
+
+
+class TavilySearchDepth(StrEnum):
+    BASIC = "basic"
+    ADVANCED = "advanced"
+    FAST = "fast"
+    ULTRA_FAST = "ultra-fast"
+
+
+QUERY_COUNT_MIN = 3
+QUERY_COUNT_MAX = 5
+QUERY_PLANNING_MAX_TOKENS = 2000
+
+HTTP_GET = "GET"
+HTTP_POST = "POST"
+USER_AGENT_HEADER = "User-Agent"
+AUTHORIZATION_HEADER = "Authorization"
+BEARER_PREFIX = "Bearer "
+
+RESEARCH_DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
+RESEARCH_DEFAULT_READ_TIMEOUT_SECONDS = 30.0
+RESEARCH_DEFAULT_MAX_CONCURRENCY = 5
+RESEARCH_DEFAULT_SNIPPET_MAX_CHARS = 8000
+RESEARCH_DOMAINS_SEPARATOR = ","
+
+WIKIPEDIA_API_URL_TEMPLATE = "https://{language}.wikipedia.org/w/api.php"
+WIKIPEDIA_CLIENT_NAME = "ChroniclerBot"
+WIKIPEDIA_CLIENT_VERSION = "0.1"
+WIKIPEDIA_DEFAULT_MAX_ARTICLES = 2
+WIKIPEDIA_DEFAULT_EXTRACT_MAX_CHARS = 6000
+WIKIPEDIA_ACTION_QUERY = "query"
+WIKIPEDIA_FORMAT_JSON = "json"
+WIKIPEDIA_FORMAT_VERSION = 2
+WIKIPEDIA_LIST_SEARCH = "search"
+WIKIPEDIA_MAIN_NAMESPACE = 0
+WIKIPEDIA_EMPTY_PARAMETER = ""
+WIKIPEDIA_FLAG_ON = 1
+WIKIPEDIA_ARTICLE_PROPS = "extracts|info|pageprops"
+WIKIPEDIA_DISAMBIGUATION_PROP = "disambiguation"
+WIKIPEDIA_URL_INFO = "url"
+WIKIPEDIA_SECTION_FORMAT = "wiki"
+WIKIPEDIA_STRESS_MARK = "́"
+WIKIPEDIA_HEADING_PATTERN = r"^(={2,6})[ \t]*(.+?)[ \t]*\1[ \t]*$"
+WIKIPEDIA_SERVICE_SECTIONS: dict[WikipediaLanguage, frozenset[str]] = {
+    WikipediaLanguage.RU: frozenset(
+        {"примечания", "литература", "ссылки", "см. также", "источники", "комментарии"}
+    ),
+    WikipediaLanguage.EN: frozenset(
+        {
+            "references",
+            "external links",
+            "further reading",
+            "see also",
+            "notes",
+            "bibliography",
+            "sources",
+            "footnotes",
+            "citations",
+        }
+    ),
+}
+
+TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+TAVILY_DEFAULT_MAX_RESULTS = 5
+TAVILY_DEFAULT_CHUNKS_PER_SOURCE = 3
+TAVILY_MAX_RESULTS_LIMIT = 20
+TAVILY_MAX_CHUNKS_PER_SOURCE = 3
+TAVILY_DEPTHS_WITHOUT_CHUNKS = frozenset({TavilySearchDepth.ULTRA_FAST})
+
+WIKIPEDIA_CONTACT_ENV_NAME = "WIKIPEDIA_CONTACT"
+TAVILY_API_KEY_ENV_NAME = "TAVILY_API_KEY"

@@ -1,0 +1,21 @@
+{
+ "batchcomplete": true,
+ "continue": {
+  "sroffset": 2,
+  "continue": "-||"
+ },
+ "query": {
+  "search": [
+   {
+    "ns": 0,
+    "title": "Мамай",
+    "pageid": 118877
+   },
+   {
+    "ns": 0,
+    "title": "Мамай (мангыт)",
+    "pageid": 3119654
+   }
+  ]
+ }
+}

@@ -14,7 +14,9 @@ Input: the topic the author sent. Output: 3-5 search queries, in Russian and Eng
 
 - LLM step: `query_planning`.
 - Response is validated by a Pydantic model; a malformed reply is a failure, not a guess.
-- Code enforces the count (3-5) and drops duplicates and empty queries.
+- Code enforces the count (3-5), non-empty queries and no duplicates (compared ignoring case).
+  A reply that breaks this is invalid: the client asks the model again, and after the retries
+  the step raises `LLMInvalidResponseError`. Code does not repair the list by dropping entries.
 
 ### 2. Research
 
@@ -23,8 +25,12 @@ Input: the queries. Output: a list of `Snippet`.
 - No LLM. Every research source implements `search(query) -> list[Snippet]` (see
   [architecture.md](architecture.md)). Sources: Wikipedia ru, Wikipedia en, Tavily.
 - Sources run concurrently. A source that fails is logged and skipped; the pipeline continues
-  with the others. If every source fails, the run stops with an error to the author.
-- Snippets are deduplicated by URL and by text.
+  with the others. The research step returns the snippets together with the list of failures
+  and does not raise for a source error. If every source fails, the result has no snippets and
+  the pipeline stops with an error to the author.
+- Snippets are deduplicated by normalised URL; of several snippets with one URL the longest text
+  stays. Their text is cut to a configured length. Domain allow and block lists are applied first.
+  Duplicates by text across different URLs are not removed.
 
 ### 3. Fact extraction
 
@@ -88,7 +94,7 @@ models and live in `app/domain/`.
 
 | Model        | Idea                                                                                                           |
 | ------------ | -------------------------------------------------------------------------------------------------------------- |
-| `Snippet`    | A piece of source text as returned by a research source: text, URL, title, source name, language, retrieval time |
+| `Snippet`    | A piece of source text as returned by a research source: id, origin, title, URL, text, language. No retrieval time yet |
 | `SourceRef`  | A pointer from a fact to its evidence: the snippet id, the URL, the domain, the verbatim quote                  |
 | `Fact`       | One atomic claim in Russian, one or more `SourceRef`, a `FactStatus`, optional links to contradicting facts     |
 | `FactStatus` | `confirmed`, `single`, `disputed`                                                                              |
