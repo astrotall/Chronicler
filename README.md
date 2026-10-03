@@ -20,8 +20,8 @@ verifies the links in between.
    domains) or `single`, a second model pass finds contradictions, and those facts become
    `disputed`. Too few facts is a result shown to the author, not a guess.
 4. **Write.** The model writes a short post, a long post or a thread strictly from the facts; the
-   topic only frames the post. Disputed facts are shown to the model apart and written
-   cautiously. Code checks the length (one retry, then the draft is marked, never cut) and warns
+   topic only frames the post, and the post adds no conclusion or claim of importance the facts
+   do not state. Disputed facts are shown to the model apart and written cautiously. Code checks the length (one retry, then the draft is marked, never cut) and warns
    about every number in the post that is not among the facts.
 5. **Filter style.** Deterministic style checks, then an LLM critic pass. On a violation the post
    is regenerated with a note on what to fix, up to 2 attempts.

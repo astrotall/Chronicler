@@ -55,8 +55,39 @@ closed. A decision on an open question is recorded here in the same change that 
 | Length: one retry with the exact problems, then deliver marked | See "Length limits" below |
 | Style rule data in `app/config/style.py`, one source | The writing prompt renders its rules from it and the style filter reads it. Not an env variable: a phrase contains a comma |
 | Writing prompt: English structure, Russian style rules | Matches the other prompts. The rules block is in Russian with the phrases it bans. A fully Russian prompt is to be tried if the voice reads wooden |
+| Voice rules 13-16 and the opinion cap from the first live drafts | See "Voice rules from live drafts" below |
+| A first-person opinion: at most 1 per post or thread, in config | "Allowed" was read as "expected": an opinion closed every second tweet. `OPINION_MAX_PER_POST` in `app/config/style.py` |
+| Dates, years, terms, sums, sizes, ages and percentages in digits; small counts may be words | Digits are what the number check sees. "два войска" reads naturally and is not a risk; the risk is a computed interval ("через два года"), which the rule forbids when no fact states it |
+| The thread format rule no longer says "each tweet reads on its own" | It pushed the model to close every tweet with a comment. Replaced by "may be one short sentence, needs no closing line, is never a fragment" |
+| Em and en dash forbidden, a spaced hyphen " - " replaces them | The author's decision. "Replace with a full stop, a comma or a colon" made the model put an awkward comma where the dash was. The rule says the spaced hyphen replaces a dash only, so it does not become a default punctuation mark |
 
 ## Details of decided questions
+
+### Voice rules from live drafts
+
+The first live drafts (HIS-6, DeepSeek, the Kulikovo facts, no examples) closed almost every
+tweet with a line that commented on the fact before it or rated its importance, put a
+first-person opinion in every second tweet, wrote "через два года" past the number check, and
+replaced a dash with an awkward comma. HIS-21 added rules 13-16 to the rules block, rewrote rules
+1, 2 and 4 (see [style-rules.md](style-rules.md)), and told the writer that a cause, a consequence
+or a claim of importance no fact states is a new claim.
+
+Measured with `tests/test_generator_live.py` on two hand-written fact sets (Kulikovo, Apollo 11),
+two samples per topic and format, before and after, no examples in both:
+
+- Filler closers and claims of importance: in all 4 threads before (no short post had one),
+  none after.
+- First-person opinions: 4 in 8 samples before, none after.
+- Numbers in words outside the check ("через два года"): 2 before, none after.
+- Dash replaced by a comma: 1 before, none after. Rule 4 then changed: the author allowed a
+  spaced hyphen in place of a dash and dropped "replace with a full stop, a comma or a colon".
+  The new wording has not been measured live.
+- Not improved: threads are still mostly one fact per tweet, now without the closer, and the text
+  reads drier, closer to the facts' own wording. Zero opinions may be an over-correction. Short
+  posts went over 280 characters after the retry in 2 of 4 samples before and 3 of 4 after; that
+  is a separate problem.
+
+Two samples per cell are noise-level evidence. The voice is still meant to come from the examples.
 
 ### Wikipedia extracts
 
@@ -170,7 +201,9 @@ How the verifier compares a number in the post with the facts.
   - Roman-numeral centuries (`XIX век`) are not extracted, so they are neither matched nor
     reported.
   - Numbers in words (`двенадцать`) are not extracted either: a post that writes a number in
-    words passes the check unseen.
+    words passes the check unseen. Since HIS-21 style rule 15 asks for digits in dates, years,
+    terms, sums, sizes, ages and percentages and forbids computed intervals; small counts in words
+    are allowed and stay unchecked. A rule narrows the gap, it does not close it.
   - Approximate wording is ignored: `около 300` and `300` are the same number to the check.
   - `1.500` reads as 1500; a date with dots splits into the day and month and the year.
 - Still open: whether Roman numerals and numbers in words get a conversion, and whether step 5
