@@ -46,6 +46,8 @@ closed. A decision on an open question is recorded here in the same change that 
 | "Not enough facts" is a typed result, not an exception | `FactsExtracted \| InsufficientFacts` makes the writing step handle both, and the author still sees what was found |
 | Extra candidates are dropped, not rejected | The model sometimes returns more than the 40 asked for. A retry repeats a whole extraction; dropping the tail loses nothing that was verified |
 
+| Git hooks: `make check` and `make test` both in pre-commit, no pre-push | See "Git hooks" below                                                    |
+
 ## Details of decided questions
 
 ### Wikipedia extracts
@@ -95,6 +97,7 @@ call is 1 search plus up to 2 article requests). It is simple and wasteful: a Ru
 to English Wikipedia mostly finds little. Routing Russian queries to ru and English ones to en
 can be added later in the orchestrator without touching the sources.
 
+<<<<<<< HEAD
 ### Quote normalisation
 
 Goal: catch an invented quote, never drop an honest one over typography. Removed or folded: stress
@@ -107,6 +110,19 @@ occurs everywhere. The full order is in [pipeline.md](pipeline.md), step 3.
 
 Measured on the Wikipedia fixtures with DeepSeek: across 6 runs, no support item was dropped.
 DeepSeek copies quotes verbatim; normalisation was needed once (`""` for `«»`).
+### Git hooks
+
+Plain git hooks in `.githooks/`, enabled by `make setup-hooks` (`core.hooksPath`), with no hook
+framework and no new dependency. `.githooks/pre-commit` runs `make check` and then `make test`.
+
+- Timing, measured on the author's machine (HIS-20): `make test` took 3.2 to 4.1 s wall time over
+  three runs (326 tests, pytest itself 2.6 to 3.1 s), `make check` 0.7 s. The threshold was about
+  20 s, so `make test` goes in pre-commit and there is no pre-push hook.
+- Revisit: if `make test` grows past about 20 s, move it to a `pre-push` hook and keep `make check`
+  in pre-commit.
+- The hooks only read. No auto-format, no staging, no network, no `integration` tests (those are
+  excluded from `make test` by `addopts` in `pyproject.toml`).
+- `--no-verify` is allowed. CI runs the same gate, so skipping only delays the failure.
 
 ## Open questions
 

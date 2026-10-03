@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+fail() {
+    printf '\n[pre-commit] %s failed. The commit is blocked.\n' "$1" >&2
+    printf '[pre-commit] Fix it (make format repairs formatting and lint), or skip with: git commit --no-verify\n' >&2
+    exit 1
+}
+
+make check || fail "make check"
+make test || fail "make test"

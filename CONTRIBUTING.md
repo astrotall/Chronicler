@@ -157,7 +157,7 @@ Some files drift apart silently. Change them together:
 
 ## Pull requests
 
-Run the checks locally before pushing:
+Run the checks locally before pushing (the pre-commit hook runs the first two on every commit):
 
 ```bash
 make check    # ruff format check, ruff lint, mypy strict
@@ -191,6 +191,30 @@ The `(HIS-<n>)` in the title is for Jira. The full URL in the body is for anyone
 that pulls task context.
 
 One PR, one ticket. Refactoring nearby code "while you are here" goes in a separate ticket.
+
+## Git hooks
+
+The hooks live in `.githooks/` and are tracked in git. Turn them on once per clone:
+
+```bash
+make setup-hooks    # git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` runs `make check`, then `make test`, from the repository root wherever git
+was started. It stops at the first failure with a non-zero exit code, so the commit does not
+happen. It only reads: it does not format, stage or change any file (use `make format` yourself),
+makes no network calls and never runs the `integration` tests. There is no pre-push hook: the
+whole gate takes a few seconds, see [decisions.md](.claude/docs/decisions.md).
+
+To skip the hook for one commit:
+
+```bash
+git commit --no-verify
+```
+
+Skipping does not remove the failure. CI runs the same `make check` and `make test` on every pull
+request, and a red CI is never merged, so `--no-verify` only moves the failure from your machine
+to the pull request.
 
 ## Checks and CI
 
