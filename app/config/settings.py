@@ -1,6 +1,6 @@
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.config.constants import (
@@ -11,6 +11,13 @@ from app.config.constants import (
     DEEPSEEK_DEFAULT_MODEL,
     ENV_FILE,
     ENV_FILE_ENCODING,
+    FACTS_DEFAULT_DOMAIN_GROUPS,
+    FACTS_DEFAULT_INPUT_MAX_CHARS,
+    FACTS_DEFAULT_MAX_FACTS,
+    FACTS_DEFAULT_MIN_FACTS,
+    FACTS_DEFAULT_MIN_QUOTE_CHARS,
+    FACTS_DOMAIN_GROUPS_SEPARATOR,
+    FACTS_DOMAIN_MEMBERS_SEPARATOR,
     OWNER_IDS_SEPARATOR,
     RESEARCH_DEFAULT_CONNECT_TIMEOUT_SECONDS,
     RESEARCH_DEFAULT_MAX_CONCURRENCY,
@@ -100,6 +107,14 @@ class Settings(BaseSettings):
     research_allowed_domains: Annotated[list[str], NoDecode] = Field(default_factory=list)
     research_blocked_domains: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
+    facts_input_max_chars: int = Field(default=FACTS_DEFAULT_INPUT_MAX_CHARS, ge=1)
+    facts_min_quote_chars: int = Field(default=FACTS_DEFAULT_MIN_QUOTE_CHARS, ge=1)
+    facts_max_facts: int = Field(default=FACTS_DEFAULT_MAX_FACTS, ge=1)
+    facts_min_facts: int = Field(default=FACTS_DEFAULT_MIN_FACTS, ge=1)
+    facts_domain_groups: Annotated[list[list[str]], NoDecode] = Field(
+        default_factory=lambda: [list(group) for group in FACTS_DEFAULT_DOMAIN_GROUPS]
+    )
+
     @field_validator("owner_telegram_ids", mode="before")
     @classmethod
     def split_owner_ids(cls, value: object) -> object:
@@ -115,6 +130,27 @@ class Settings(BaseSettings):
             parts = (part.strip().lower() for part in value.split(RESEARCH_DOMAINS_SEPARATOR))
             return [part for part in parts if part]
         return value
+
+    @field_validator("facts_domain_groups", mode="before")
+    @classmethod
+    def split_domain_groups(cls, value: object) -> object:
+        if isinstance(value, str):
+            groups = (
+                [
+                    member.strip().lower()
+                    for member in group.split(FACTS_DOMAIN_MEMBERS_SEPARATOR)
+                    if member.strip()
+                ]
+                for group in value.split(FACTS_DOMAIN_GROUPS_SEPARATOR)
+            )
+            return [group for group in groups if group]
+        return value
+
+    @model_validator(mode="after")
+    def require_facts_range(self) -> Self:
+        if self.facts_min_facts > self.facts_max_facts:
+            raise ValueError("FACTS_MIN_FACTS must not exceed FACTS_MAX_FACTS")
+        return self
 
     @field_validator("log_level", mode="before")
     @classmethod

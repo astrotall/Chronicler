@@ -78,8 +78,11 @@ Do not revisit these without an explicit instruction from the user.
 
 The skeleton from HIS-2 exists: `app/main.py`, `app/config/`, `app/bot/` and `tests/`. HIS-3
 added the LLM client in `app/llm` with its models in `app/domain/llm.py` and the JSON reply prompt
-in `app/prompts/json_reply.py`. `research` and `services` are empty packages that later tickets
-fill. `db` does not exist yet.
+in `app/prompts/json_reply.py`. HIS-4 added the research sources in `app/research` and, in
+`app/services`, query planning and the research orchestrator. HIS-5 added fact extraction in
+`app/services/facts.py` with the quote check and the source domain rules beside it, and its models
+in `app/domain/fact.py`. The writing, style and delivery steps are not built yet, and the bot does
+not run the pipeline yet. `db` does not exist yet.
 
 ## Detailed guides
 

@@ -244,6 +244,35 @@ this is an invalid reply: the LLM client sends the problems back, and after
 it does not catch other LLM errors. The prompt is `app/prompts/query_planning.py`. It asks for
 queries in Russian and in English, but code does not check the languages.
 
+### Fact extraction
+
+`extract_facts(client, topic, snippets, limits)` (`app/services/facts.py`) takes the
+`fact_extraction` client, the topic, the snippets from research and `FactLimits` (built by
+`FactLimits.from_settings`). It returns `FactExtraction`, the union `FactsExtracted |
+InsufficientFacts` from `app/domain/fact.py`; "not enough facts" is a result, not an exception.
+The full behaviour is in [pipeline.md](pipeline.md), step 3.
+
+| Module                          | Holds                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------ |
+| `app/services/facts.py`         | The reply schemas (`ExtractedFacts`, `ConflictReport`), the budget, alias mapping, verification, status, dispute pass, limit and the result |
+| `app/services/quote_check.py`   | Pure functions: text normalisation, `check_quote`, `extract_numbers`, `numbers_supported` |
+| `app/services/source_domain.py` | Pure function `source_domain(url, groups)`; reuses `host_matches` from the research orchestrator |
+| `app/prompts/fact_extraction.py`| `render_fact_extraction` and `render_dispute_check`                       |
+| `app/domain/fact.py`            | `SourceRef`, `Fact`, `FactStatus`, `Dispute`, `FactSet`, `ExtractionStats`, the two outcomes |
+
+- Two `complete_json` calls on the same client: extraction (`FACT_EXTRACTION_MAX_TOKENS`) and the
+  contradiction check (`DISPUTE_CHECK_MAX_TOKENS`). Contradictions are the same kind of mechanical
+  reading as extraction, so they share the step and its provider; there is no separate step key.
+- Neither call is caught: `LLMError` and `LLMInvalidResponseError` propagate. A blank topic is a
+  `ValueError`. No snippets returns `InsufficientFacts` without a call.
+- The reply schemas validate shape only. Labels, ids, quotes and numbers are checked by code
+  after validation, so a wrong label drops one support item instead of failing the reply.
+- The model sees snippet labels `S1`... and fact ids `C1`..., never the snippet hashes. A label is
+  matched after trimming spaces and square brackets and ignoring case; anything else is unknown.
+- One INFO line per run logs the `ExtractionStats` counters. Each dropped support item is logged
+  at DEBUG with its label, snippet id and reason. Texts of snippets, facts, quotes and model
+  replies are never logged.
+
 ## Configuration
 
 - All settings come from one Pydantic settings model, filled from environment variables and an
@@ -266,5 +295,7 @@ queries in Russian and in English, but code does not check the languages.
 - `pytest` with `pytest-asyncio`. `respx` mocks HTTP for source clients and provider clients.
 - Services are tested against a fake `LLMClient` and a fake `ResearchSource`, so no test touches
   the network or a real model.
-- The verifiers (quote check, number and date check, style filter) are pure functions and are
-  tested hardest, including their boundary cases.
+- The verifiers (quote check, number check, source domain, style filter) are pure functions and
+  are tested hardest, including their boundary cases.
+- Multi-call services use a scripted fake client that returns its replies in order
+  (`tests/fact_helpers.py`).

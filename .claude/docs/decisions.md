@@ -33,6 +33,18 @@ closed. A decision on an open question is recorded here in the same change that 
 | Every query goes to every source         | See "Source routing" below                                                                      |
 | A duplicate query is an invalid plan, not a repair | The client's retry asks the model for a corrected list. Code silently dropping entries could leave fewer than 3 |
 | The domain filter is in the orchestrator, for all origins | One place, one behaviour. Allow and block lists are empty by default              |
+| Wikipedia language editions are one domain | Translations often copy each other's mistakes, so ru and en Wikipedia do not make a fact `confirmed`. Mirrors (wikimedia.org, ruwiki.ru, wikiwand.com) join them by default |
+| The model groups one claim across snippets, code counts domains | Recognising "the same claim" needs language understanding; counting domains does not |
+| Domain outside groups is the last two host labels | No public suffix list without a new dependency. Merging `x.co.uk` and `y.co.uk` errs towards `single`; the full host would err towards a false `confirmed` |
+| Snippets are shown to the model as `S1`, `S2`... | A 16-character hash is easy to garble. An unknown label drops the support item, nothing is guessed |
+| Fact text in Russian, quote in the snippet's language | The post is Russian; a translated quote could not be checked. The translation itself is guarded by the number check |
+| Numbers of a fact must occur in its quotes | Step 4 checks the post's numbers against the fact text, so the fact text must be bound to the source too |
+| Quote check normalises typography, not wording | See "Quote normalisation" below |
+| One extraction call within a character budget, no batches | Grouping one claim across snippets needs all snippets in one call. The budget cuts long snippets to a common cap, see pipeline.md |
+| Contradictions are a second pass on the `fact_extraction` step | Same kind of reading, same provider. It sees only fact texts, before the limit |
+| A contradiction needs an explicit verdict from the model | Without it DeepSeek reported sequences of events as contradictions, even while writing "this is not a contradiction" |
+| "Not enough facts" is a typed result, not an exception | `FactsExtracted \| InsufficientFacts` makes the writing step handle both, and the author still sees what was found |
+| Extra candidates are dropped, not rejected | The model sometimes returns more than the 40 asked for. A retry repeats a whole extraction; dropping the tail loses nothing that was verified |
 
 ## Details of decided questions
 
@@ -83,6 +95,19 @@ call is 1 search plus up to 2 article requests). It is simple and wasteful: a Ru
 to English Wikipedia mostly finds little. Routing Russian queries to ru and English ones to en
 can be added later in the orchestrator without touching the sources.
 
+### Quote normalisation
+
+Goal: catch an invented quote, never drop an honest one over typography. Removed or folded: stress
+marks (a model does not reproduce an invisible mark), quote marks of every kind (models swap `«»`
+for `""` or drop them), dashes and the spaces around them, ellipses as chunk boundaries, case,
+`ё`/`е`, whitespace, soft hyphens and zero-width characters, end punctuation of a part. Not
+folded: words, word order, digits, letters. A quote that differs from the source by one word or
+one digit is not found. A part shorter than 20 characters never counts, because `в 1380 году`
+occurs everywhere. The full order is in [pipeline.md](pipeline.md), step 3.
+
+Measured on the Wikipedia fixtures with DeepSeek: across 6 runs, no support item was dropped.
+DeepSeek copies quotes verbatim; normalisation was needed once (`""` for `«»`).
+
 ## Open questions
 
 Each question has a provisional default so work can proceed. The default is not a decision until
@@ -93,18 +118,11 @@ it is recorded in the "Decided" table.
 Which domains count as reliable, which as weak, and whether a weak domain can contribute to
 `confirmed` at all.
 
-- Provisional default: all domains are equal, `confirmed` needs 2 distinct registrable domains.
+- Provisional default: all domains are equal, `confirmed` needs 2 distinct domains after the
+  domain rules in [pipeline.md](pipeline.md), step 3.
 - Consequence of leaving it: two content-farm pages that copy each other count as independent.
 - To settle: a config list of trusted and blocked domains, and whether blocked domains are
   dropped before extraction or only excluded from status counting.
-
-### Wikipedia language editions and independence
-
-Whether `ru.wikipedia.org` and `en.wikipedia.org` are two independent domains.
-
-- Provisional default: they are the same domain (`wikipedia.org`), so two Wikipedia articles do
-  not make a fact `confirmed`. Translations often copy each other's mistakes.
-- To settle: confirm, or count by language edition.
 
 ### Web search provider
 
@@ -125,14 +143,16 @@ How the verifier compares a number in the post with the facts.
   as strings; numbers written in words are not matched and count as a violation until a
   conversion is added.
 - A false alarm costs one regeneration, so the default errs strict.
+- Step 3 already checks the numbers of a fact against its quotes with `extract_numbers`
+  (`app/services/quote_check.py`, rules in [pipeline.md](pipeline.md)). Step 4 can reuse it; Roman
+  numerals and numbers in words are still open there.
 
-### How the facts of one claim are grouped
+### Merged claims
 
-Which facts from different sources are "the same claim", needed to count independent domains.
-
-- Provisional default: the model groups them during fact extraction and code counts the domains.
-- Risk: the model may merge two different claims. A cheap embedding or string-overlap check
-  could back it up. Not decided.
+The model groups support for one claim during extraction (decided above). Open: the model may
+merge two different claims into one fact, and two domains behind a merged fact would make it a
+false `confirmed`. A cheap embedding or string-overlap check could back the grouping up. Not
+decided.
 
 ### Images
 
