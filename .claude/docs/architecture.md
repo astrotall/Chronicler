@@ -273,13 +273,48 @@ The full behaviour is in [pipeline.md](pipeline.md), step 3.
   at DEBUG with its label, snippet id and reason. Texts of snippets, facts, quotes and model
   replies are never logged.
 
+### Writing
+
+`write_draft(client, fact_set, post_format, limits, examples, *, angle, revision)`
+(`app/services/generator.py`) takes the `writing` client, a `FactSet`, a `PostFormat`,
+`WritingLimits` (built by `WritingLimits.from_settings`), the few-shot examples as strings, an
+optional angle and an optional `Revision`. It returns a `Draft` from `app/domain/draft.py`. The
+full behaviour is in [pipeline.md](pipeline.md), step 4.
+
+| Module                           | Holds                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `app/services/generator.py`      | The reply schemas (`SingleReply`, `ThreadReply`), `WritingLimits`, numbering, the length check and its one retry, fact id matching, the number check |
+| `app/services/style.py`          | `load_examples(directory, limit)`: the few-shot loader                   |
+| `app/prompts/writing.py`         | `render_writing` and `render_length_correction`                          |
+| `app/prompts/style_rules.py`     | `render_style_rules`: the Russian rules block, shared with the critic prompt of step 5 |
+| `app/config/style.py`            | Style rule data: banned phrases, forbidden dashes, invented-experience phrases, cautious wordings |
+| `app/domain/draft.py`            | `PostFormat`, `DraftPart`, `LengthIssue`, `LengthViolation`, `Revision`, `Draft` |
+
+- One `complete_json` call (`WRITING_*_MAX_TOKENS` per format), and one more only when a length
+  limit is broken. The second call carries the first reply as an `assistant` turn and the list of
+  problems as a `user` turn. It does not use `LLM_JSON_MAX_RETRIES`, which stays for invalid JSON.
+- The number check reuses `extract_numbers` from `app/services/quote_check.py`, and id matching
+  reuses `normalize_label` from `app/services/facts.py`.
+- One method serves every button of step 6: "короче" and "ещё вариант" pass a `Revision` built
+  from `Draft.texts`, "другой заход" passes an angle, "в тред" passes `PostFormat.THREAD`.
+- The generator does not read files. The caller loads the examples with `load_examples` and
+  passes them in. The loader reads `*.md` files of `EXAMPLES_DIR` sorted by name, skips hidden,
+  empty and non-UTF-8 files (the last with a WARNING naming the file), and returns the first
+  `EXAMPLES_MAX` texts, stripped. A missing directory gives no examples. `EXAMPLES_DIR` is
+  relative to the working directory, the repository root under `make run`.
+- LLM errors and `LLMInvalidResponseError` propagate. Texts of posts, facts and replies are never
+  logged; the INFO line holds counters only.
+
 ## Configuration
 
 - All settings come from one Pydantic settings model, filled from environment variables and an
   `.env` file (never committed).
 - The model holds: the Telegram token, the whitelist of Telegram IDs, provider keys, the provider
-  per step, model names, source URLs, retry and attempt limits, length limits, the banned-phrase
-  list, the number of few-shot examples.
+  per step, model names, source URLs, retry and attempt limits, length limits, the examples
+  directory and the number of few-shot examples.
+- The banned-phrase list and the other style rule data are constants in `app/config/style.py`,
+  not environment variables: a phrase such as "это не просто X, а Y" contains the comma that a
+  list in one variable would split on.
 - Nothing in the list above is a literal inside logic.
 
 ## Prompts
@@ -289,6 +324,8 @@ The full behaviour is in [pipeline.md](pipeline.md), step 3.
 - A prompt module exposes a function that takes domain models and returns messages. It makes no
   network calls.
 - The writing prompt omits the few-shot block when the example set is empty.
+- Structure and service instructions are in English. The style rules block shown to the writer
+  is in Russian, rendered from `app/config/style.py`.
 
 ## Testing approach
 
@@ -297,5 +334,5 @@ The full behaviour is in [pipeline.md](pipeline.md), step 3.
   the network or a real model.
 - The verifiers (quote check, number check, source domain, style filter) are pure functions and
   are tested hardest, including their boundary cases.
-- Multi-call services use a scripted fake client that returns its replies in order
-  (`tests/fact_helpers.py`).
+- Services use a scripted fake client that returns its replies in order and records the calls
+  (`ScriptedLLMClient` in `tests/llm_helpers.py`).

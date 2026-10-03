@@ -41,8 +41,6 @@ from fact_helpers import (
     RU_WIKI,
     SNIPPETS,
     WINNER_QUOTE,
-    ScriptedLLMClient,
-    as_client,
     conflict,
     conflicts,
     extraction,
@@ -50,6 +48,7 @@ from fact_helpers import (
     make_limits,
     support,
 )
+from llm_helpers import ScriptedLLMClient, as_client
 from research_helpers import make_settings, make_snippet
 
 TOPIC = "Куликовская битва"

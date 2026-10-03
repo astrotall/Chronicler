@@ -45,8 +45,16 @@ closed. A decision on an open question is recorded here in the same change that 
 | A contradiction needs an explicit verdict from the model | Without it DeepSeek reported sequences of events as contradictions, even while writing "this is not a contradiction" |
 | "Not enough facts" is a typed result, not an exception | `FactsExtracted \| InsufficientFacts` makes the writing step handle both, and the author still sees what was found |
 | Extra candidates are dropped, not rejected | The model sometimes returns more than the 40 asked for. A retry repeats a whole extraction; dropping the tail loses nothing that was verified |
-
 | Git hooks: `make check` and `make test` both in pre-commit, no pre-push | See "Git hooks" below                                                    |
+| The topic is a frame for the writer, not a source | It tells the model what the post is about and what could hook. Every claim, number and date comes from the facts; a number only in the topic is reported as unverified |
+| The writer sees fact ids, texts and statuses, never quotes or URLs | The post is written in the model's words, not copied from a source |
+| Disputed facts go to the writer in their own block | A disputed fact is never in the list of facts to state, so the model cannot state it flatly by mistake |
+| An unverified number in a post is a warning, not a regeneration | The author sees it next to the post. See "Matching numbers and dates" below |
+| One writing method for every button      | Angle and revision are optional inputs of `write_draft`; a button re-enters step 4 without new code paths |
+| The writer replies in JSON, fact ids first | `complete_json` validates the reply. Ids first make the model pick facts before it writes; the text is the last field |
+| Length: one retry with the exact problems, then deliver marked | See "Length limits" below |
+| Style rule data in `app/config/style.py`, one source | The writing prompt renders its rules from it and the style filter reads it. Not an env variable: a phrase contains a comma |
+| Writing prompt: English structure, Russian style rules | Matches the other prompts. The rules block is in Russian with the phrases it bans. A fully Russian prompt is to be tried if the voice reads wooden |
 
 ## Details of decided questions
 
@@ -97,7 +105,6 @@ call is 1 search plus up to 2 article requests). It is simple and wasteful: a Ru
 to English Wikipedia mostly finds little. Routing Russian queries to ru and English ones to en
 can be added later in the orchestrator without touching the sources.
 
-<<<<<<< HEAD
 ### Quote normalisation
 
 Goal: catch an invented quote, never drop an honest one over typography. Removed or folded: stress
@@ -110,6 +117,7 @@ occurs everywhere. The full order is in [pipeline.md](pipeline.md), step 3.
 
 Measured on the Wikipedia fixtures with DeepSeek: across 6 runs, no support item was dropped.
 DeepSeek copies quotes verbatim; normalisation was needed once (`""` for `«»`).
+
 ### Git hooks
 
 Plain git hooks in `.githooks/`, enabled by `make setup-hooks` (`core.hooksPath`), with no hook
@@ -153,15 +161,20 @@ adequate for history topics, and whether a second provider is needed.
 
 How the verifier compares a number in the post with the facts.
 
-- Cases to define: "1 812" and "1812", "в 1812 году" and "1812 г.", "XIX век" and "19 век",
-  "двенадцать" and "12", ranges ("1941-1945"), approximate wording ("около 300").
-- Provisional default: extract digits and Roman-numeral centuries, normalise separators, compare
-  as strings; numbers written in words are not matched and count as a violation until a
-  conversion is added.
-- A false alarm costs one regeneration, so the default errs strict.
-- Step 3 already checks the numbers of a fact against its quotes with `extract_numbers`
-  (`app/services/quote_check.py`, rules in [pipeline.md](pipeline.md)). Step 4 can reuse it; Roman
-  numerals and numbers in words are still open there.
+- Decided for step 4 (HIS-6): `extract_numbers` from `app/services/quote_check.py`, the same rules
+  as in step 3 (separators, ranges, decimals; see [pipeline.md](pipeline.md)). The numbers of every
+  part of the post must be among the numbers of the texts of all facts in the `FactSet`, disputed
+  ones included. A mismatch goes to `Draft.unverified_numbers` as a warning; the post is not
+  blocked and not regenerated. The numbering prefix of a thread is not checked.
+- Known limits, accepted for now:
+  - Roman-numeral centuries (`XIX век`) are not extracted, so they are neither matched nor
+    reported.
+  - Numbers in words (`двенадцать`) are not extracted either: a post that writes a number in
+    words passes the check unseen.
+  - Approximate wording is ignored: `около 300` and `300` are the same number to the check.
+  - `1.500` reads as 1500; a date with dots splits into the day and month and the year.
+- Still open: whether Roman numerals and numbers in words get a conversion, and whether step 5
+  turns a warning into a regeneration.
 
 ### Merged claims
 
@@ -178,18 +191,29 @@ it. The `images` scope is reserved. No code until a ticket for it exists.
 
 ### Length limits
 
-- Long post: configurable, 25000 characters by default (X Premium). Decided as a config value.
-- Short post: no number yet. Needs a default.
-- Thread: the per-post limit, the maximum number of posts, and whether a post may be cut
-  mid-sentence (it must not).
-- To settle: pick defaults after a few real drafts.
+Decided as config values (HIS-6), defaults to be revisited after real drafts:
+
+- Short post: `SHORT_MAX_CHARS`, 280.
+- Long post: `LONG_MAX_CHARS`, 25000 (X Premium).
+- Thread: `THREAD_TWEET_MAX_CHARS`, 280 per tweet, and `THREAD_MAX_TWEETS`, 12. The model splits
+  at meaning boundaries; a tweet is never cut mid-sentence by code.
+- Counting is `len()` of the part as delivered. X counts a URL as 23 characters and emoji and CJK
+  as 2, after NFC; for Russian text without links and emoji the counts match.
+- On a breach the model gets one retry with the exact parts and numbers. If it still breaks a
+  limit, the draft is delivered with `length_violations`; code never truncates.
+- Numbering (`1/ `) is off by default (`THREAD_NUMBERING`). Code adds it after the reply, the
+  model is given a tweet limit reduced by the widest prefix, and the full length is checked.
+- Open: how many facts a thread needs (see [pipeline.md](pipeline.md), failure behaviour).
 
 ### Few-shot selection
 
 How examples enter the prompt once they exist: all of them, the N most recent, or the N most
 similar to the topic. Also how many fit before the prompt costs more than the style gain.
 
-- Provisional default: the first N files in `data/examples/` sorted by name, N from config.
+- Provisional default, implemented in HIS-6: the first `EXAMPLES_MAX` (3) non-empty `*.md` files
+  in `EXAMPLES_DIR` (`data/examples`) sorted by name. Hidden files, `.gitkeep`, other extensions
+  and files that are not UTF-8 are skipped. No examples means no examples block.
+- Open: an example has no length cap, so a long reference post makes every prompt longer.
 
 ### Critic strictness
 

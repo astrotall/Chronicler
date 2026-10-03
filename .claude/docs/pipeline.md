@@ -152,16 +152,63 @@ is `single`. Without a public suffix list the last two labels sometimes merge un
 
 ### 4. Writing
 
-Input: the `FactSet`, the requested format (short, long, thread), the few-shot examples. Output:
-a `Draft`.
+Input: the `FactSet`, the format (`short`, `long`, `thread`), the few-shot examples, and two
+optional inputs for the buttons of step 6: an angle and a revision (an instruction with the
+previous text). Output: a `Draft`. The caller passes a `FactSet` only after it has matched
+`FactsExtracted`; deciding that `InsufficientFacts` is not enough for a post is not this step's
+job. An empty `FactSet` is a `ValueError` before any call.
 
-- LLM step: `writing`. The prompt contains the facts and nothing else about the world. The raw
-  topic is passed only as a framing hint, never as a source of claims.
-- **Code verifies numbers and dates.** Every number and date in the draft must appear among the
-  facts. A draft that contains a figure absent from the facts is rejected and regenerated,
-  counted against the same attempt budget as step 5.
-- `disputed` facts are written cautiously: attributed ("по версии ...", "источники расходятся"),
-  never stated flatly.
+- LLM step: `writing`, one `complete_json` call. The prompt contains the facts and nothing else
+  about the world.
+- **The topic is a frame, not a source.** `FactSet.topic` is in the prompt to say what the post is
+  about and what could hook the reader. Every claim, number and date comes from the facts block.
+  A number taken from the topic is not among the facts and is reported like any other.
+- **What the model sees of a fact:** its id (`F1`...), its text and its status. Never the quotes
+  or the URLs: the post is written in the model's own words, not copied from a source.
+- **Disputed facts are a separate block.** A fact is disputed if its status is `disputed` or it
+  belongs to a `Dispute`. Such facts are shown only under the disputed header, grouped by
+  dispute with its explanation, and never in the block of facts to state. The prompt asks for
+  cautious wording ("по одним данным ..., по другим ...", "источники расходятся") or leaving the
+  fact out.
+- **Style rules** are rendered into the prompt from the same data the style filter of step 5
+  uses (`app/config/style.py`, see [style-rules.md](style-rules.md)).
+- **Examples** are a separate system message, marked as a sample of rhythm and manner whose
+  wording, topics and facts must not be copied. With no examples the message is omitted.
+- **Reply.** `{fact_ids, text}` for `short` and `long`, `{fact_ids, tweets}` for `thread` (2 or
+  more tweets). `fact_ids` comes first, so the model picks its facts before it writes, and the
+  text is the last field. Ids are matched like snippet labels (trimmed, square brackets dropped,
+  case ignored); unknown ids are dropped and counted, repeated ones are kept once.
+- **Length.** Code counts `len()` of each part as delivered, numbering included. Limits:
+  `SHORT_MAX_CHARS` (280), `LONG_MAX_CHARS` (25000), `THREAD_TWEET_MAX_CHARS` (280) per tweet and
+  `THREAD_MAX_TWEETS` (12). If a part is too long or a thread has too many tweets, the model gets
+  its reply back with a list of exactly which parts break which limit, once
+  (`WRITING_LENGTH_RETRIES`). If the second reply still breaks a limit, the `Draft` is returned
+  with `length_violations`. Code never cuts text.
+- **Thread numbering** (`THREAD_NUMBERING`, off by default) is added by code after the reply, as
+  a `prefix` of each part (`1/ `). The model is told a tweet limit reduced by the widest prefix;
+  code checks the full length. The prefix is not part of `text`, so the number check and the
+  style filter never see it.
+- **Code checks numbers and dates.** Every number in every part (`extract_numbers`, the rules of
+  step 3) must be among the numbers of the texts of all facts in the `FactSet`, disputed ones
+  included, because a post may state both versions. Numbers that are not are listed in
+  `Draft.unverified_numbers`. This is a warning shown to the author, not a rejection and not a
+  regeneration; whether step 5 folds it into its regeneration loop is decided there.
+- An LLM error or an invalid reply is not caught. One INFO line logs the format and counters:
+  parts, used facts, unknown ids, unverified numbers, length violations, attempts. Texts are never
+  logged.
+
+Known limits of the number check:
+
+- Roman numerals (`XIV век`) and numbers written in words (`двенадцать`) are not numbers for
+  `extract_numbers`. A post that writes them is not checked for them.
+- Approximation is not understood: `около 300` matches a fact with `300`, and a fact with `около
+  300` matches a post that states exactly `300`.
+- The limits of step 3 apply: `1.500` reads as 1500, a date with dots splits into `8.09` and the
+  year.
+
+Known limits of the length count: `len()` counts code points. X counts every URL as 23
+characters, emoji and CJK characters as 2, and normalises to NFC first. For Russian text without
+links and emoji the two counts match; posts here have no emoji by rule 9.
 
 ### 5. Style filter
 
@@ -195,8 +242,7 @@ cheap and the facts the author already checked stay the same.
 
 ## Data models
 
-All of them are Pydantic v2 models and live in `app/domain/`. `Draft` is still an idea; its
-fields are fixed when the code is written.
+All of them are Pydantic v2 models and live in `app/domain/`.
 
 | Model               | Fields and meaning                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -210,7 +256,11 @@ fields are fixed when the code is written.
 | `FactsExtracted`    | `outcome = extracted`, the `FactSet` and the stats                                                         |
 | `InsufficientFacts` | `outcome = insufficient_facts`, the `FactSet` of what survived, `assertable_count`, `required`, the stats |
 | `FactExtraction`    | `FactsExtracted \| InsufficientFacts`. A caller has to tell them apart; step 4 accepts only `FactsExtracted` |
-| `Draft`             | A post or thread: its parts, the format, the ids of the facts it uses, the attempt number, the violations found |
+| `PostFormat`        | `short`, `long`, `thread`                                                                                 |
+| `DraftPart`         | One part of a post: `text` as the model wrote it and a `prefix` added by code (numbering); `rendered` is the two joined |
+| `LengthViolation`   | `issue` (`part_too_long` or `too_many_parts`), the 1-based `part` or none, `actual` and `limit`            |
+| `Revision`          | `instruction` and `previous` (the texts of the previous draft's parts), for "короче" and "ещё вариант"    |
+| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the author copies |
 
 ### Fact status
 
@@ -240,8 +290,8 @@ the domain rules in step 3: language editions of Wikipedia and its mirrors are o
 | Triplets, flat opening, uniform rhythm, invented experience | Model  | Cannot be reduced to a pattern reliably                  |
 | Post length against the configured limit                | Code       | Plain count                                              |
 
-A number the code cannot match to a fact is treated as a failure even if it happens to be
-correct. A false alarm costs one regeneration; a missed invention costs the author's credibility.
+A number the code cannot match to a fact is reported even if it happens to be correct. It is a
+warning in the draft, not a rejection: the author sees it next to the post and decides.
 
 ## Failure behaviour
 
