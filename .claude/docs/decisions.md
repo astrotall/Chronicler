@@ -21,6 +21,9 @@ closed. A decision on an open question is recorded here in the same change that 
 | Few-shot is the main style lever          | A banned-phrase list only moves the cliche. Examples set the voice                           |
 | The mechanism works with zero examples    | There are no reference posts at the start                                                   |
 | Tavily as the starting web search         | One API, built for LLM use, returns text snippets. Not a lock-in, see below                 |
+| LLM clients on plain `httpx`, no SDK      | Two small endpoints. No new dependency, and retries, timeouts and errors stay under our control |
+| Structured replies by schema instruction, validation and retry | Works the same on both providers. DeepSeek adds `json_object` mode. Anthropic's native `output_config.format` takes a subset of JSON Schema, and an unsupported keyword is a 400 with no retry |
+| DeepSeek thinking off by default          | Thinking ignores `temperature` and spends `max_tokens` on reasoning. `DEEPSEEK_THINKING=true` turns it on |
 
 ## Open questions
 

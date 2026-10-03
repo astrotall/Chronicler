@@ -43,3 +43,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: live requests to provider APIs, need API keys, run with: uv run pytest -m integration",
+]

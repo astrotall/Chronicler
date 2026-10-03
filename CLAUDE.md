@@ -76,9 +76,10 @@ Do not revisit these without an explicit instruction from the user.
     └── examples/              Reference posts for few-shot, may be empty
 ```
 
-The skeleton from HIS-2 exists: `app/main.py`, `app/config/`, `app/bot/` and `tests/`. `llm`,
-`research`, `services`, `prompts` and `domain` are empty packages that later tickets fill. `db`
-does not exist yet.
+The skeleton from HIS-2 exists: `app/main.py`, `app/config/`, `app/bot/` and `tests/`. HIS-3
+added the LLM client in `app/llm` with its models in `app/domain/llm.py` and the JSON reply prompt
+in `app/prompts/json_reply.py`. `research` and `services` are empty packages that later tickets
+fill. `db` does not exist yet.
 
 ## Detailed guides
 
