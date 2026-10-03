@@ -47,12 +47,13 @@ def make_draft(
     *,
     unverified_numbers: Sequence[str] = (),
     length_violations: Sequence[LengthViolation] = (),
+    used_fact_ids: Sequence[str] = ("F1",),
 ) -> Draft:
     chosen = post_format or (PostFormat.SHORT if len(texts) == 1 else PostFormat.THREAD)
     return Draft(
         post_format=chosen,
         parts=[DraftPart(text=text) for text in texts],
-        used_fact_ids=["F1"],
+        used_fact_ids=list(used_fact_ids),
         unverified_numbers=list(unverified_numbers),
         length_violations=list(length_violations),
         attempts=1,
@@ -69,12 +70,19 @@ def make_writing_limits() -> WritingLimits:
 
 
 def make_style_limits(
-    *, critic_enabled: bool = True, max_regenerations: int = 2, critic_max_findings: int = 10
+    *,
+    critic_enabled: bool = True,
+    max_regenerations: int = 2,
+    critic_max_findings: int = 10,
+    min_retained_chars_ratio: float = 0.6,
+    min_retained_facts_ratio: float = 0.6,
 ) -> StyleLimits:
     return StyleLimits(
         critic_enabled=critic_enabled,
         max_regenerations=max_regenerations,
         critic_max_findings=critic_max_findings,
+        min_retained_chars_ratio=min_retained_chars_ratio,
+        min_retained_facts_ratio=min_retained_facts_ratio,
     )
 
 

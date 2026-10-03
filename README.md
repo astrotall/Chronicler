@@ -23,14 +23,16 @@ verifies the links in between.
    topic only frames the post, and the post adds no conclusion or claim of importance the facts
    do not state. Disputed facts are shown to the model apart and written cautiously. Code checks
    the length (a retry, then the draft is marked; a short post is written from 3 facts picked by
-   code and is cut only if `SHORT_DROP_TAIL` is on) and warns about every number in the post
-   that is not among the facts.
+   code and is cut only if `SHORT_DROP_TAIL` is on; a long post has a minimum size and facts
+   count, and a draft below it gets one retry, then a warning) and warns about every number in
+   the post that is not among the facts.
 5. **Filter style.** Deterministic checks (dashes, banned phrases, invented experience, emoji,
    hashtags, a closing question, length, numbers not among the facts), then an LLM critic that
    reads the post against the facts (claims the facts do not state, ambiguous pronouns, filler
    lines, cliches, rhetorical triplets, extra opinions). On a violation the post is regenerated
    with the exact list of what to fix, up to 2 times; the best version goes out with whatever
-   violations are left. A critic failure never loses the post, it is flagged.
+   violations are left. A regeneration that shrinks the post or drops most of its facts is
+   rejected and never chosen. A critic failure never loses the post, it is flagged.
 6. **Deliver.** Telegram receives the post, the facts with their sources underneath, and the
    buttons "короче", "в тред", "другой заход", "ещё вариант".
 
@@ -257,7 +259,9 @@ uv run pytest tests/test_facts_live.py -m integration -o log_cli=true --log-cli-
 | `SHORT_SENTENCE_CHARS`    | Sentence length in the short post budget, 80 by default: 280 // 80 = 3 sentences |
 | `SHORT_LENGTH_RETRIES`    | Retries of an overlong short post, 2 by default (long and thread get 1)  |
 | `SHORT_DROP_TAIL`         | `true` drops trailing paragraphs or sentences of a short post still over the limit after the retries; default `false` |
-| `LONG_MAX_CHARS`          | Longest long post, 25000 by default (X Premium)                          |
+| `LONG_MAX_CHARS`          | Longest long post, 25000 by default (X Premium); a ceiling, not a target |
+| `LONG_MIN_CHARS`          | Shortest long post, 1200 by default (about 3 paragraphs); `0` turns the minimum off |
+| `LONG_MIN_USED_FACTS`     | Facts a long post must use, 6 by default, capped by the facts that can be stated; `0` turns it off |
 | `THREAD_TWEET_MAX_CHARS`  | Longest tweet of a thread, numbering included, 280 by default            |
 | `THREAD_MAX_TWEETS`       | Most tweets in a thread, 12 by default, at least 2                       |
 | `THREAD_NUMBERING`        | `true` adds `1/ `, `2/ `... before each tweet, default `false`           |
@@ -278,6 +282,15 @@ their structure and that every part fits its limit with no tail dropped, and sav
 uv run pytest tests/test_generator_live.py -m integration -o log_cli=true --log-cli-level=INFO
 ```
 
+The long post live test (`tests/test_long_live.py`) writes 3 long posts per hand-made fact set
+(18 facts each, written from the model's knowledge: they check the form of the text, not its
+facts) through the whole writing and style loop with DeepSeek, and saves the texts, the counters
+and the fact set to `data/comparisons/his30_<topic>.json`:
+
+```bash
+uv run pytest tests/test_long_live.py -m integration -o log_cli=true --log-cli-level=INFO
+```
+
 ### Style filter
 
 | Variable                    | Meaning                                                                |
@@ -285,6 +298,13 @@ uv run pytest tests/test_generator_live.py -m integration -o log_cli=true --log-
 | `STYLE_CRITIC_ENABLED`      | `false` turns the LLM critic off; the deterministic checks always run, default `true` |
 | `STYLE_MAX_REGENERATIONS`   | Most regenerations after a violation, 2 by default; `0` only reports    |
 | `STYLE_CRITIC_MAX_FINDINGS` | Most critic findings used per check, 10 by default; extra ones are dropped and counted |
+| `STYLE_MIN_RETAINED_CHARS_RATIO` | A regeneration that keeps less than this share of the characters is rejected, 0.6 by default |
+| `STYLE_MIN_RETAINED_FACTS_RATIO` | The same for the used facts, 0.6 by default |
+
+A regeneration is a regression only if it is under a ratio and has lost more than 100 characters
+(for the characters) or more than 1 fact (for the facts), so deleting one flagged sentence of a
+short post is never rejected. A rejected regeneration is never chosen, never becomes the text the
+next attempt starts from, and uses one of the `STYLE_MAX_REGENERATIONS`.
 
 The critic runs on the `style_critique` step (`LLM_STYLE_CRITIQUE_PROVIDER`). The banned phrases,
 the invented-experience phrases and the rules that weigh more when the best version is chosen

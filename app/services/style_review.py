@@ -6,6 +6,12 @@ from typing import NamedTuple, Self
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import style
+from app.config.constants import (
+    STYLE_DEFAULT_MIN_RETAINED_CHARS_RATIO,
+    STYLE_DEFAULT_MIN_RETAINED_FACTS_RATIO,
+    STYLE_REGRESSION_FREE_CHARS,
+    STYLE_REGRESSION_FREE_FACTS,
+)
 from app.config.settings import Settings
 from app.domain.draft import Draft, Revision
 from app.domain.fact import FactSet
@@ -41,6 +47,12 @@ class StyleLimits(BaseModel):
     critic_enabled: bool
     max_regenerations: int = Field(ge=0)
     critic_max_findings: int = Field(ge=1)
+    min_retained_chars_ratio: float = Field(
+        default=STYLE_DEFAULT_MIN_RETAINED_CHARS_RATIO, gt=0, le=1
+    )
+    min_retained_facts_ratio: float = Field(
+        default=STYLE_DEFAULT_MIN_RETAINED_FACTS_RATIO, gt=0, le=1
+    )
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Self:
@@ -48,6 +60,8 @@ class StyleLimits(BaseModel):
             critic_enabled=settings.style_critic_enabled,
             max_regenerations=settings.style_max_regenerations,
             critic_max_findings=settings.style_critic_max_findings,
+            min_retained_chars_ratio=settings.style_min_retained_chars_ratio,
+            min_retained_facts_ratio=settings.style_min_retained_facts_ratio,
         )
 
 
@@ -69,6 +83,28 @@ def best_index(evaluations: Sequence[Evaluation]) -> int:
     return min(
         range(len(evaluations)),
         key=lambda index: (*severity(evaluations[index].report), -index),
+    )
+
+
+def text_chars(draft: Draft) -> int:
+    return sum(len(text) for text in draft.texts)
+
+
+def lost_too_much(previous: int, current: int, min_ratio: float, free: int) -> bool:
+    return current < previous * min_ratio and previous - current > free
+
+
+def is_regression(previous: Draft, regenerated: Draft, limits: StyleLimits) -> bool:
+    return lost_too_much(
+        text_chars(previous),
+        text_chars(regenerated),
+        limits.min_retained_chars_ratio,
+        STYLE_REGRESSION_FREE_CHARS,
+    ) or lost_too_much(
+        len(previous.used_fact_ids),
+        len(regenerated.used_fact_ids),
+        limits.min_retained_facts_ratio,
+        STYLE_REGRESSION_FREE_FACTS,
     )
 
 
@@ -145,6 +181,8 @@ async def review_style(
     forbidden: list[str] = []
     regenerations = 0
     regeneration_failed = False
+    regressions_rejected = 0
+    after_regression = False
     while (
         needs_regeneration(evaluations[-1].report)
         and regenerations < style_limits.max_regenerations
@@ -152,7 +190,9 @@ async def review_style(
         current = evaluations[-1]
         forbidden = forbidden_phrases(forbidden, current.report.violations)
         revision = Revision(
-            instruction=render_style_revision(current.report.violations, forbidden),
+            instruction=render_style_revision(
+                current.report.violations, forbidden, after_regression=after_regression
+            ),
             previous=current.draft.texts,
         )
         try:
@@ -172,6 +212,11 @@ async def review_style(
             regeneration_failed = True
             break
         regenerations += 1
+        if is_regression(current.draft, regenerated, style_limits):
+            regressions_rejected += 1
+            after_regression = True
+            continue
+        after_regression = False
         evaluations.append(
             await evaluate(critic, regenerated, fact_set, style_limits, allow_closing_question)
         )
@@ -183,16 +228,18 @@ async def review_style(
         chosen_attempt=chosen + 1,
         regenerations=regenerations,
         regeneration_failed=regeneration_failed,
+        regressions_rejected=regressions_rejected,
     )
     logger.info(
         "style reviewed format=%s attempts=%d chosen=%d regenerations=%d "
-        "regeneration_failed=%s critic=%s violations=%d dangerous=%d rules=%s "
-        "critic_dropped=%d critic_withdrawn=%d critic_over_limit=%d",
+        "regeneration_failed=%s regressions_rejected=%d critic=%s violations=%d dangerous=%d "
+        "rules=%s critic_dropped=%d critic_withdrawn=%d critic_over_limit=%d",
         draft.post_format,
         result.attempts,
         result.chosen_attempt,
         regenerations,
         regeneration_failed,
+        regressions_rejected,
         RULE_COUNT_SEPARATOR.join(evaluation.report.critic.value for evaluation in evaluations),
         len(result.report.violations),
         severity(result.report)[0],

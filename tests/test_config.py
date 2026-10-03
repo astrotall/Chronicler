@@ -151,6 +151,10 @@ def test_writing_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert settings.short_max_chars == 280
     assert settings.long_max_chars == 25000
+    assert settings.long_min_chars == 1200
+    assert settings.long_min_used_facts == 6
+    assert settings.style_min_retained_chars_ratio == 0.6
+    assert settings.style_min_retained_facts_ratio == 0.6
     assert settings.thread_tweet_max_chars == 280
     assert settings.thread_max_tweets == 12
     assert settings.thread_numbering is False
@@ -180,6 +184,11 @@ def test_writing_settings_are_read_from_the_environment(monkeypatch: pytest.Monk
     [
         ("SHORT_MAX_CHARS", "0"),
         ("LONG_MAX_CHARS", "0"),
+        ("LONG_MIN_CHARS", "-1"),
+        ("LONG_MIN_USED_FACTS", "-1"),
+        ("STYLE_MIN_RETAINED_CHARS_RATIO", "0"),
+        ("STYLE_MIN_RETAINED_CHARS_RATIO", "1.1"),
+        ("STYLE_MIN_RETAINED_FACTS_RATIO", "0"),
         ("THREAD_TWEET_MAX_CHARS", "0"),
         ("THREAD_MAX_TWEETS", "1"),
         ("EXAMPLES_MAX", "-1"),
@@ -198,3 +207,12 @@ def test_numbering_must_fit_into_the_tweet_limit(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setenv("THREAD_NUMBERING", "false")
     assert facts_env(monkeypatch, THREAD_TWEET_MAX_CHARS="4").thread_tweet_max_chars == 4
+
+
+def test_the_long_minimum_must_not_exceed_the_long_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValidationError, match="LONG_MIN_CHARS"):
+        facts_env(monkeypatch, LONG_MIN_CHARS="3000", LONG_MAX_CHARS="2000")
+
+    assert (
+        facts_env(monkeypatch, LONG_MIN_CHARS="2000", LONG_MAX_CHARS="2000").long_min_chars == 2000
+    )

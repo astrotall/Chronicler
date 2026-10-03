@@ -224,16 +224,27 @@ def part_name(post_format: PostFormat, part: int | None) -> str:
 
 
 def length_warning(violation: LengthViolation, post_format: PostFormat) -> str:
-    if violation.issue is LengthIssue.TOO_MANY_PARTS:
-        detail = messages.LENGTH_TOO_MANY_PARTS_TEMPLATE.format(
-            actual=violation.actual, limit=violation.limit
-        )
-    else:
-        detail = messages.LENGTH_PART_TEMPLATE.format(
-            part=part_name(post_format, violation.part),
-            actual=violation.actual,
-            limit=violation.limit,
-        )
+    match violation.issue:
+        case LengthIssue.TOO_MANY_PARTS:
+            detail = messages.LENGTH_TOO_MANY_PARTS_TEMPLATE.format(
+                actual=violation.actual, limit=violation.limit
+            )
+        case LengthIssue.TOO_FEW_FACTS:
+            detail = messages.LENGTH_TOO_FEW_FACTS_TEMPLATE.format(
+                actual=violation.actual, limit=violation.limit
+            )
+        case LengthIssue.TOO_SHORT:
+            detail = messages.LENGTH_TOO_SHORT_TEMPLATE.format(
+                part=part_name(post_format, violation.part),
+                actual=violation.actual,
+                limit=violation.limit,
+            )
+        case LengthIssue.PART_TOO_LONG:
+            detail = messages.LENGTH_PART_TEMPLATE.format(
+                part=part_name(post_format, violation.part),
+                actual=violation.actual,
+                limit=violation.limit,
+            )
     return f"{messages.LENGTH_PREFIX}{detail}"
 
 
@@ -283,6 +294,10 @@ def warnings(ready: PostReady) -> list[str]:
         found.append(messages.CRITIC_FAILED_TEXT)
     if result.regeneration_failed:
         found.append(messages.REGENERATION_FAILED_TEXT)
+    if result.regressions_rejected:
+        found.append(
+            messages.REGRESSIONS_REJECTED_TEMPLATE.format(count=result.regressions_rejected)
+        )
     if draft.dropped_tail:
         found.append(
             messages.DROPPED_TAIL_TEMPLATE.format(

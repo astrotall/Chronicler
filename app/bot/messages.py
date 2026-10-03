@@ -107,6 +107,8 @@ UNVERIFIED_NUMBERS_TEMPLATE = "Числа, которых нет в фактах
 NUMBER_SEPARATOR = ", "
 LENGTH_PART_TEMPLATE = "{part}: {actual} символов при лимите {limit}."
 LENGTH_TOO_MANY_PARTS_TEMPLATE = "в треде {actual} твитов при максимуме {limit}."
+LENGTH_TOO_SHORT_TEMPLATE = "{part}: {actual} символов при минимуме {limit}, слишком коротко."
+LENGTH_TOO_FEW_FACTS_TEMPLATE = "в посте {actual} фактов при минимуме {limit}."
 LENGTH_PREFIX = "Длина, "
 POST_PART_NAME = "пост"
 TWEET_PART_TEMPLATE = "твит {part}"
@@ -118,6 +120,10 @@ CRITIC_FAILED_TEXT = (
 )
 REGENERATION_FAILED_TEXT = (
     "Перегенерация после замечаний не удалась, показан лучший из уже готовых вариантов."
+)
+REGRESSIONS_REJECTED_TEMPLATE = (
+    "Правок фильтра стиля отклонено: {count}. Они слишком сильно сокращали текст, "
+    "показан предыдущий вариант."
 )
 DROPPED_TAIL_TEMPLATE = (
     "Код срезал конец поста, чтобы уложиться в лимит: {pieces}. Список использованных "

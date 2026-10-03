@@ -118,7 +118,8 @@ async def test_the_revision_names_each_violation_and_keeps_the_previous_text() -
 
     prompt = revision_prompt(writer, 0)
     assert f"Previous version of the post:\n{WITH_CLICHE_AND_DASH}" in prompt
-    assert "Fix only the problems listed below and keep everything else as it is" in prompt
+    assert "Fix only the flagged fragments below." in prompt
+    assert "The rest of the text stays word for word, the same length, the same facts" in prompt
     assert "- part 1: «сделала выбор. Победа — начало.»: Длинное или среднее тире (—)" in prompt
     assert f"- part 1: «{CLICHE}»: Штамп без факта." in prompt
     assert "Angle requested by the author: о цене победы" in prompt

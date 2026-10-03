@@ -83,6 +83,7 @@ def make_ready(
     violations: list[Violation] | None = None,
     critic: CriticStatus = CriticStatus.CHECKED,
     regeneration_failed: bool = False,
+    regressions_rejected: int = 0,
     unverified: list[str] | None = None,
     length: list[LengthViolation] | None = None,
     dropped: list[str] | None = None,
@@ -108,6 +109,7 @@ def make_ready(
             chosen_attempt=1,
             regenerations=0,
             regeneration_failed=regeneration_failed,
+            regressions_rejected=regressions_rejected,
         ),
         fact_set=FACT_SET,
         actions=list(PostAction),
@@ -523,3 +525,32 @@ def test_button_failures_have_a_clear_status(
 def test_a_ready_post_has_no_status() -> None:
     assert render_topic_outcome(make_ready()).status is None
     assert render_rework_outcome(make_ready(variant=True)).status is None
+
+
+def test_a_rejected_regression_is_warned_about_with_a_count_only() -> None:
+    ready = make_ready(regressions_rejected=2)
+
+    found = warnings(ready)
+
+    assert found == [messages.REGRESSIONS_REJECTED_TEMPLATE.format(count=2)]
+    assert "Правок фильтра стиля отклонено: 2" in found[0]
+    assert "слишком сильно сокращали текст, показан предыдущий вариант" in found[0]
+
+
+def test_no_regression_warning_when_nothing_was_rejected() -> None:
+    assert warnings(make_ready()) == []
+
+
+def test_a_too_short_long_post_names_the_size_and_the_minimum() -> None:
+    ready = make_ready(
+        post_format=PostFormat.LONG,
+        length=[
+            LengthViolation(issue=LengthIssue.TOO_SHORT, part=1, actual=640, limit=1200),
+            LengthViolation(issue=LengthIssue.TOO_FEW_FACTS, actual=3, limit=6),
+        ],
+    )
+
+    text = "\n".join(warnings(ready))
+
+    assert "Длина, пост: 640 символов при минимуме 1200, слишком коротко." in text
+    assert "Длина, в посте 3 фактов при минимуме 6." in text

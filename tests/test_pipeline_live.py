@@ -32,6 +32,7 @@ from app.services.research import ResearchLimits, ResearchService
 from app.services.run_store import InMemoryRunStore
 from pydantic import BaseModel
 
+from fact_snapshot import fact_set_entry
 from live_keys import LiveKeys, skip_without_key
 
 KEYS = LiveKeys()
@@ -234,6 +235,7 @@ async def test_live_topic_to_post_and_thread(slug: str) -> None:
         "snippet_chars": sum(len(snippet.text) for snippet in research.snippets),
         "failures": [failure.model_dump() for failure in research.failures],
         "stats": first.stats.model_dump() if first.stats else None,
+        **fact_set_entry(first.fact_set),
         "fact_statuses": dict(statuses),
         "confirmed_domains": [
             sorted({ref.domain for ref in fact.support})

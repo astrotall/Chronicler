@@ -66,3 +66,4 @@ class StyleResult(BaseModel):
     chosen_attempt: int = Field(ge=1)
     regenerations: int = Field(ge=0)
     regeneration_failed: bool = False
+    regressions_rejected: int = Field(default=0, ge=0)

@@ -22,6 +22,8 @@ from app.config.constants import (
     FACTS_DOMAIN_GROUPS_SEPARATOR,
     FACTS_DOMAIN_MEMBERS_SEPARATOR,
     LONG_DEFAULT_MAX_CHARS,
+    LONG_DEFAULT_MIN_CHARS,
+    LONG_DEFAULT_MIN_USED_FACTS,
     OWNER_IDS_SEPARATOR,
     PIPELINE_DEFAULT_TIMEOUT_SECONDS,
     POST_DEFAULT_FORMAT,
@@ -38,6 +40,8 @@ from app.config.constants import (
     STYLE_DEFAULT_CRITIC_ENABLED,
     STYLE_DEFAULT_CRITIC_MAX_FINDINGS,
     STYLE_DEFAULT_MAX_REGENERATIONS,
+    STYLE_DEFAULT_MIN_RETAINED_CHARS_RATIO,
+    STYLE_DEFAULT_MIN_RETAINED_FACTS_RATIO,
     TAVILY_DEFAULT_CHUNKS_PER_SOURCE,
     TAVILY_DEFAULT_MAX_RESULTS,
     TAVILY_MAX_CHUNKS_PER_SOURCE,
@@ -141,6 +145,8 @@ class Settings(BaseSettings):
     short_length_retries: int = Field(default=SHORT_DEFAULT_LENGTH_RETRIES, ge=0)
     short_drop_tail: bool = False
     long_max_chars: int = Field(default=LONG_DEFAULT_MAX_CHARS, ge=1)
+    long_min_chars: int = Field(default=LONG_DEFAULT_MIN_CHARS, ge=0)
+    long_min_used_facts: int = Field(default=LONG_DEFAULT_MIN_USED_FACTS, ge=0)
     thread_tweet_max_chars: int = Field(default=THREAD_TWEET_DEFAULT_MAX_CHARS, ge=1)
     thread_max_tweets: int = Field(default=THREAD_DEFAULT_MAX_TWEETS, ge=THREAD_MIN_TWEETS)
     thread_numbering: bool = False
@@ -151,6 +157,12 @@ class Settings(BaseSettings):
     style_critic_enabled: bool = STYLE_DEFAULT_CRITIC_ENABLED
     style_max_regenerations: int = Field(default=STYLE_DEFAULT_MAX_REGENERATIONS, ge=0)
     style_critic_max_findings: int = Field(default=STYLE_DEFAULT_CRITIC_MAX_FINDINGS, ge=1)
+    style_min_retained_chars_ratio: float = Field(
+        default=STYLE_DEFAULT_MIN_RETAINED_CHARS_RATIO, gt=0, le=1
+    )
+    style_min_retained_facts_ratio: float = Field(
+        default=STYLE_DEFAULT_MIN_RETAINED_FACTS_RATIO, gt=0, le=1
+    )
 
     post_default_format: PostFormatName = POST_DEFAULT_FORMAT
     thread_min_facts: int = Field(default=THREAD_DEFAULT_MIN_FACTS, ge=1)
@@ -192,6 +204,12 @@ class Settings(BaseSettings):
     def require_facts_range(self) -> Self:
         if self.facts_min_facts > self.facts_max_facts:
             raise ValueError("FACTS_MIN_FACTS must not exceed FACTS_MAX_FACTS")
+        return self
+
+    @model_validator(mode="after")
+    def require_long_range(self) -> Self:
+        if self.long_min_chars > self.long_max_chars:
+            raise ValueError("LONG_MIN_CHARS must not exceed LONG_MAX_CHARS")
         return self
 
     @model_validator(mode="after")
