@@ -382,7 +382,7 @@ job. An empty `FactSet` is a `ValueError` before any call.
   the unused list of the expand correction, the thread threshold and the bot all use it.
 - **A short post gets a selection of the facts.** Before the call, code picks at most
   `SHORT_MAX_FACTS` (3) facts for `short` (`select_short_facts`, `app/services/short_post.py`);
-  `long` and `thread` get the whole `FactSet`. The rules:
+  `long` gets the whole `FactSet`, `thread` gets its own selection (next point). The rules:
   1. Assertable facts (not disputed, not attributed), `confirmed` first, then `single`, in
      `FactSet` order inside each status. A short post never gets an attributed claim: three
      sentences have no room for the attribution and the rebuttal. Step 3 orders the facts by
@@ -397,6 +397,34 @@ job. An empty `FactSet` is a `ValueError` before any call.
   sees every fact and every dispute. The number check still uses the whole `FactSet`; the
   disputed part of `used_fact_ids` uses only the selection (see "Used facts" below). A
   consequence: every angle ("другой заход") of a short post gets the same facts.
+- **A thread gets a selection of the facts (HIS-42).** Before the call, code picks the facts for
+  `thread` (`select_thread_facts`, `app/services/thread_selection.py`), no LLM. Measured in HIS-40:
+  offered 20 to 24 facts, the writer used 17 to 23 and wrote 9 to 13 tweets, a list of facts. The
+  writer does not limit itself, so the limit comes from code. The rules:
+  1. **`THREAD_MAX_FACTS` (10) asserted facts**: assertable facts (not disputed, not attributed)
+     in `FactSet` order, the first N. Step 3 already ordered them by trust tier, relevance and
+     aspect, so there is no re-sorting; the length of a fact's text is not used. 0 means no cap:
+     the thread gets the whole `FactSet` as before, with every block.
+  2. **Plus `THREAD_MAX_ATTRIBUTED` (2) attributed units**, counted outside the cap; 0 turns them
+     off. A unit is one disputed group (whole; overlapping groups merge, disputed facts with no
+     group form one unit), one `claimed` fact, or one `rebutted` fact together with its rebuttal.
+     A rebutted pair is never split: the rebuttal facts that are assertable and not yet selected
+     come with it (they do not count against the cap); if they are already selected, only the
+     rebutted fact is added. The pair counts as one unit. A rebutted fact with no assertable
+     rebuttal is not offered (the prompt says to leave it out anyway). Units are taken in `FactSet`
+     order of their first member; the rest are left out.
+  3. The selection is a subset of the `FactSet`: nothing is invented, rewritten or reordered, and
+     a dispute is kept only with its whole group. If nothing at all was picked (no assertable
+     fact and no unit), the whole `FactSet` is offered, so the prompt is never empty.
+  The prompt gets only the selection and renders it with the same blocks as before: the facts to
+  state, the attributed claims with their stance, the disputed groups with their explanation.
+  The `FactSet` itself does not change. Unlike `short`, a thread checks against the selection
+  everywhere: the ids the model reports (an id that was not offered is unknown), the disputed and
+  attributed facts that code finds, and the number check (a number of a fact that was not offered
+  is unverified). The selection is logged as numbers: `thread facts total assertable offered
+  offered_assertable`. Settings validation: `THREAD_MAX_FACTS`, when not 0, must be at least
+  `THREAD_MIN_FACTS` (the bot gate) and so also `THREAD_MIN_USED_FACTS`; otherwise the gate would
+  let a thread through that the selection then cuts below the gate. The start fails, naming both.
 - **Disputed facts are a separate block.** A fact is disputed if its status is `disputed` or it
   belongs to a `Dispute`. Such facts are shown only under the disputed header, grouped by
   dispute with its explanation, and never in the block of facts to state. The prompt asks for
@@ -415,7 +443,7 @@ job. An empty `FactSet` is a `ValueError` before any call.
   facts that code finds, in `FactSet` order (`app/services/disputes.py`). The bot marks disputed
   facts by this list, so a dispute stated in the text must not depend on the model reporting it.
   1. Candidates are the disputed and attributed facts of the set that went into the prompt: the
-     selection for `short`, the whole `FactSet` for `long` and `thread`. A disputed fact is one with
+     selection for `short` and `thread`, the whole `FactSet` for `long`. A disputed fact is one with
      status `disputed` or in a `Dispute`; an attributed one has stance `claimed` or `rebutted`. So
      the bot marks a version the text states even when the model did not report it.
   2. A candidate is found if it has numbers (`extract_numbers`) and all of them are among the
@@ -455,7 +483,9 @@ job. An empty `FactSet` is a `ValueError` before any call.
   with both at 0 the open rule ("2 to 12 tweets") is used. Settings validation: the tweet minimum
   must not exceed `THREAD_MAX_TWEETS`, the fact minimum must not exceed `THREAD_MIN_FACTS` (the
   bot's gate), so the start fails on an incompatible pair. The effective minimum is computed per
-  call (`thread_size`, `app/services/generator.py`) from the facts that can be stated: facts =
+  call (`thread_size`, `app/services/generator.py`) from the facts that can be stated in the
+  prompt, that is the assertable facts of the selection, not of the whole `FactSet` (HIS-42, the
+  style loop uses the same selection): facts =
   `min(THREAD_MIN_USED_FACTS, assertable)`; tweets = `min(THREAD_MIN_TWEETS, facts)`, or
   `min(THREAD_MIN_TWEETS, assertable)` when the fact minimum is off. A thread never needs more
   tweets than there are facts for them. The format rule gives numbers derived from these values:
@@ -627,7 +657,7 @@ No dependency. Each phrase becomes a regular expression:
    rules found in this or any earlier attempt (banned phrase, invented experience and every critic
    rule except `ambiguous_reference`) are listed as forbidden, so one stock phrase is not swapped
    for another.
-3. The new draft goes through all of step 4 again (short selection, length retries, number check)
+3. The new draft goes through all of step 4 again (the short or thread selection, length retries, number check)
    and then through step 5 from point 1.
 4. **A length violation alone does not regenerate:** step 4 already spent its own retries on it.
    It is reported, counts when the best version is chosen, and is in the instruction when a

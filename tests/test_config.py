@@ -278,3 +278,45 @@ def test_the_thread_minimums_can_be_turned_off(monkeypatch: pytest.MonkeyPatch) 
     settings = facts_env(monkeypatch, THREAD_MIN_TWEETS="0", THREAD_MIN_USED_FACTS="0")
 
     assert (settings.thread_min_tweets, settings.thread_min_used_facts) == (0, 0)
+
+
+def test_the_thread_selection_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = facts_env(monkeypatch)
+
+    assert settings.thread_max_facts == 10
+    assert settings.thread_max_attributed == 2
+
+
+def test_the_thread_selection_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = facts_env(monkeypatch, THREAD_MAX_FACTS="8", THREAD_MAX_ATTRIBUTED="0")
+
+    assert (settings.thread_max_facts, settings.thread_max_attributed) == (8, 0)
+    assert facts_env(monkeypatch, THREAD_MAX_FACTS="0").thread_max_facts == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "value"), [("THREAD_MAX_FACTS", "-1"), ("THREAD_MAX_ATTRIBUTED", "-1")]
+)
+def test_a_negative_thread_selection_setting_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    with pytest.raises(ValidationError):
+        facts_env(monkeypatch, **{name: value})
+
+
+def test_the_thread_cap_must_not_be_below_the_thread_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(
+        ValidationError, match="THREAD_MAX_FACTS must not be below THREAD_MIN_FACTS"
+    ):
+        facts_env(monkeypatch, THREAD_MAX_FACTS="4")
+
+    assert facts_env(monkeypatch, THREAD_MAX_FACTS="5").thread_max_facts == 5
+    assert facts_env(monkeypatch, THREAD_MAX_FACTS="0").thread_max_facts == 0
+    settings = facts_env(
+        monkeypatch, THREAD_MAX_FACTS="3", THREAD_MIN_FACTS="3", THREAD_MIN_USED_FACTS="3"
+    )
+    assert settings.thread_max_facts == 3

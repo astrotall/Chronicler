@@ -8,6 +8,7 @@ from app.config.constants import (
     SHORT_DEFAULT_LENGTH_RETRIES,
     SHORT_DEFAULT_MAX_FACTS,
     SHORT_DEFAULT_SENTENCE_CHARS,
+    THREAD_DEFAULT_MAX_ATTRIBUTED,
     THREAD_MIN_TWEETS,
     THREAD_NUMBERING_TEMPLATE,
     WRITING_LENGTH_RETRIES,
@@ -50,6 +51,7 @@ from app.services.short_post import (
     sentence_budget,
     sentences_to_cut,
 )
+from app.services.thread_selection import select_thread_facts
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +109,9 @@ class WritingLimits(BaseModel):
     long_min_used_facts: int = Field(default=0, ge=0)
     thread_min_tweets: int = Field(default=0, ge=0)
     thread_min_used_facts: int = Field(default=0, ge=0)
+    thread_min_facts: int = Field(default=0, ge=0)
+    thread_max_facts: int = Field(default=0, ge=0)
+    thread_max_attributed: int = Field(default=THREAD_DEFAULT_MAX_ATTRIBUTED, ge=0)
 
     @model_validator(mode="after")
     def require_long_range(self) -> Self:
@@ -118,6 +123,15 @@ class WritingLimits(BaseModel):
     def require_thread_range(self) -> Self:
         if self.thread_min_tweets > self.thread_max_tweets:
             raise ValueError("the thread minimum must not exceed the tweet maximum")
+        return self
+
+    @model_validator(mode="after")
+    def require_thread_selection_covers_the_minimums(self) -> Self:
+        floor = max(self.thread_min_facts, self.thread_min_used_facts)
+        if self.thread_max_facts and self.thread_max_facts < floor:
+            raise ValueError(
+                "the thread fact cap must not be below the thread gate or the used-facts minimum"
+            )
         return self
 
     @model_validator(mode="after")
@@ -142,6 +156,9 @@ class WritingLimits(BaseModel):
             long_min_used_facts=settings.long_min_used_facts,
             thread_min_tweets=settings.thread_min_tweets,
             thread_min_used_facts=settings.thread_min_used_facts,
+            thread_min_facts=settings.thread_min_facts,
+            thread_max_facts=settings.thread_max_facts,
+            thread_max_attributed=settings.thread_max_attributed,
         )
 
     def part_max_chars(self, post_format: PostFormat) -> int:
@@ -343,6 +360,14 @@ def unverified_numbers(texts: Sequence[str], fact_set: FactSet) -> list[str]:
 def facts_for_prompt(fact_set: FactSet, post_format: PostFormat, limits: WritingLimits) -> FactSet:
     if post_format is PostFormat.SHORT:
         return select_short_facts(fact_set, limits.short_max_facts)
+    if post_format is PostFormat.THREAD:
+        return select_thread_facts(fact_set, limits.thread_max_facts, limits.thread_max_attributed)
+    return fact_set
+
+
+def facts_to_verify(fact_set: FactSet, prompt_facts: FactSet, post_format: PostFormat) -> FactSet:
+    if post_format is PostFormat.THREAD:
+        return prompt_facts
     return fact_set
 
 
@@ -440,6 +465,15 @@ async def write_draft(
         raise ValueError("fact set must not be empty")
     framing = angle.strip() if angle is not None and angle.strip() else None
     prompt_facts = facts_for_prompt(fact_set, post_format, limits)
+    verified_facts = facts_to_verify(fact_set, prompt_facts, post_format)
+    if post_format is PostFormat.THREAD:
+        logger.info(
+            "thread facts total=%d assertable=%d offered=%d offered_assertable=%d",
+            len(fact_set.facts),
+            len(assertable_facts(fact_set)),
+            len(prompt_facts.facts),
+            len(assertable_facts(prompt_facts)),
+        )
     size = long_size(post_format, limits, prompt_facts)
     thread = thread_size(post_format, limits, prompt_facts)
     messages = render_writing(
@@ -456,7 +490,7 @@ async def write_draft(
     )
     reply = await request_reply(client, messages, post_format)
     attempts = 1
-    assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size, thread)
+    assessment = assess(reply, post_format, limits, verified_facts, prompt_facts, size, thread)
     for _ in range(limits.length_retries(post_format)):
         if not assessment.violations:
             break
@@ -483,7 +517,7 @@ async def write_draft(
         ]
         reply = await request_reply(client, messages, post_format)
         attempts += 1
-        assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size, thread)
+        assessment = assess(reply, post_format, limits, verified_facts, prompt_facts, size, thread)
     parts = assessment.parts
     violations = assessment.violations
     used = assessment.used
@@ -499,7 +533,7 @@ async def write_draft(
         post_format=post_format,
         parts=parts,
         used_fact_ids=used,
-        unverified_numbers=unverified_numbers([part.text for part in parts], fact_set),
+        unverified_numbers=unverified_numbers([part.text for part in parts], verified_facts),
         length_violations=violations,
         attempts=attempts,
         dropped_tail=dropped,

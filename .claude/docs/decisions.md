@@ -75,6 +75,8 @@ closed. A decision on an open question is recorded here in the same change that 
 | Length: one retry with the exact problems, then deliver marked | See "Length limits" below. For `long` and `thread`; a short post has its own rules, see "Short post length" |
 | A short post is written from at most `SHORT_MAX_FACTS` (3) facts picked by code | The model was asked to fit 6 to 10 facts into room for 2 or 3 and used 6 to 8. See "Short post length" below |
 | Short selection: `confirmed` before `single`, `FactSet` order, a dispute only whole | Code, no LLM. The extraction order puts core facts first; fact length would favour side details. Half a dispute would state one version as established |
+| A thread is written from at most `THREAD_MAX_FACTS` (10) asserted facts picked by code, plus up to `THREAD_MAX_ATTRIBUTED` (2) attributed units | In HIS-40 the writer was offered 20 to 24 facts, used 17 to 23 and wrote 9 to 13 tweets, a list of facts. The limit has to come from code, as for `short`. See "Thread fact cap (HIS-42)" below |
+| Thread selection: `FactSet` order, no re-sorting; attributed units (a disputed group, a claimed fact, a rebutted fact with its rebuttal) in `FactSet` order of their first member, outside the cap | Code, no LLM. Step 3 already ranked the facts. Without an allowance the thread would lose every dispute and every legend; a unit is never split |
 | Disputed facts a draft states are added to `used_fact_ids` by code | The model left both numbers of a dispute out of `fact_ids` in 3 of 4 Kulikovo threads, so the bot would have shown the dispute unmarked. See "Used facts and disputes" below |
 | A dispute is marked whole in `used_fact_ids` | Marking one version as used and not the other would show half a dispute as ordinary |
 | Short budget in sentences derived from the limit, not "aim below" | A model does not count characters. `SHORT_MAX_CHARS // SHORT_SENTENCE_CHARS` sentences of up to `SHORT_SENTENCE_CHARS` characters |
@@ -436,6 +438,103 @@ his40_*.json` (local, not tracked), now with the log lines of each sample.
 - **Found outside the task:** the style loop can choose a draft that crosses the ceiling or a tweet
   limit by one (13 of 12, 281 of 280), because `length` is a report-only rule and a chosen draft
   with `length_violations` goes out with a warning. Not changed here.
+
+### Thread fact cap (HIS-42)
+
+Option 1 of the HIS-40 follow-up: a thread is offered a bounded set of facts, chosen by code, the
+way HIS-22 did for `short`. The writer used nearly every fact it was offered (17 to 23 of 20 to 24)
+at about 1.8 facts a tweet, so the number of tweets followed the number of facts, and a hint in the
+prompt did nothing. Rules in [pipeline.md](pipeline.md), step 4.
+
+Decided:
+
+- **`THREAD_MAX_FACTS` = 10 asserted facts.** The tweet range is 4 to 8 (`THREAD_MIN_TWEETS` 4
+  times the multiplier 2). At the 1.5 to 1.8 facts a tweet measured in HIS-40, 10 facts are 5 to 7
+  tweets, inside the range and far from the ceiling of 12. 10 is twice `THREAD_MIN_USED_FACTS`
+  (5), so the minimum stays reachable, and above `THREAD_MIN_FACTS` (5), so a set that passes the
+  bot gate is cut only when it has more than 10 facts to state. 0 means no cap.
+- **`THREAD_MAX_ATTRIBUTED` = 2 units, outside the cap.** Without an allowance a capped thread
+  would lose every dispute and every legend, and the "по преданию" and "источники расходятся"
+  wordings would never appear. A unit is a disputed group (whole), a claimed fact, or a rebutted
+  fact with its rebuttal; the pair is never split, and a rebuttal that is pulled in does not count
+  against the cap. Units go in `FactSet` order of their first member. 0 turns them off.
+- **The order is the `FactSet` order**, already set by trust tier and relevance (HIS-27, HIS-28).
+  No re-sort (`short` sorts `confirmed` before `single`; a thread does not, because step 3 has
+  ranked them and a re-sort would undo the relevance and aspect order).
+- **Relation to the other thread settings.** `THREAD_MIN_FACTS` is the bot gate on the whole
+  `FactSet`; `THREAD_MIN_USED_FACTS` the floor on the used facts; `THREAD_MAX_FACTS` the ceiling
+  on the offered ones. `THREAD_MAX_FACTS`, when not 0, must be at least `THREAD_MIN_FACTS`, or the
+  gate would let a thread through that the selection cuts below the gate; and so at least
+  `THREAD_MIN_USED_FACTS`. The start fails and names both variables; `WritingLimits` checks the
+  same. The effective minimum of HIS-40 is capped by the assertable facts of the selection, not of
+  the `FactSet`, and the tweet minimum still never exceeds the fact minimum.
+- **A thread verifies against the selection:** reported ids, found disputed and attributed facts
+  and the number check. An id or a number of a fact that was not offered is unknown or unverified.
+  `short` is unchanged and still checks numbers against the whole `FactSet`.
+- **The style loop is safe against a changing fact set only because the selections are
+  deterministic.** `review_style` and every regeneration call `write_draft` with the whole
+  `FactSet`, and `write_draft` selects again; the same input gives the same set, so the regenerated
+  draft is written from the facts of the first one, and the regression guard compares like with
+  like. If a selection ever becomes non-deterministic (for example an LLM-driven hook or outline
+  selection), the style loop must receive the selected set explicitly instead of recomputing it.
+  Covered by `tests/test_thread_selection.py`.
+- **Known limits:** the selection is by position, not by what makes a story; a dispute that sits
+  after the allowance is not offered (a `FactSet` where two legends come before the dispute loses
+  the dispute); a rebutted fact whose rebuttal is not assertable is not offered; the typical range
+  in the prompt (4 to 8) does not shrink with a small selection; THREAD_MAX_FACTS says nothing
+  about the order of the tweets.
+
+Live check (`tests/test_thread_live.py`, DeepSeek, thread, the saved fact sets `his8_kulikovo`
+(26 facts, 20 to state) and `his8_soviet_day_1930s` (24 facts, 21 to state), 3 samples each, the
+whole write and style loop, empty examples, no Tavily). The saved report is `data/comparisons/
+his42_*.json` (local, not tracked). 35 calls counted at the client level (19 writer, 16 critic).
+Offered: Kulikovo 12 facts (10 asserted and 2 claimed, F21 and F22; the dispute F24 to F26 came
+third in `FactSet` order and was left out), Soviet 13 facts (10 asserted, F21 pulled in as the
+rebuttal of F22, F22 rebutted, F23 claimed: 11 assertable and 2 attributed units).
+
+| | Kulikovo | Soviet 1930s |
+| --- | --- | --- |
+| Tweets (HIS-40: 11, 10, 9 / 13, 13, 11) | 7, 7, 6 | 11, 10, 8 |
+| Used facts (HIS-40: 18, 18, 17 / 23, 23, 23) | 9, 9, 8 of 12 | 13, 11, 12 of 13 |
+| Facts per tweet | 1.29, 1.29, 1.33 | 1.18, 1.1, 1.5 |
+| Length retry of the first draft | none | a 336-character tweet; none; two tweets of 286 and 329 |
+| Style regenerations | 2, 2, 2 | 2, 0, 2 |
+| Regressions rejected | 0 | 0 |
+| Over the tweet ceiling | none | none |
+| Left in the chosen draft | `unsupported_claim`; `ambiguous_reference`, `unsupported_claim`, `filler`; none | 3 `unsupported_claim`; none; `length` (a tweet of 291), `cliche`, 2 `unsupported_claim` |
+
+- **Tweets:** all three Kulikovo threads are in the 4 to 8 range (6 to 7), where HIS-40 had 0 of 6.
+  Soviet: one of three (8), the others 10 and 11. No thread crosses the ceiling of 12 (HIS-40: two
+  at 13 of 12). The cause of the Soviet overshoot is the same as before: the writer used 11 to 13
+  of the 13 facts it was offered, at about one fact a tweet. 13 facts are 10 or 11 short tweets
+  (51 to 263 characters). A cap of 10 is right for Kulikovo and too high for the Soviet set; the
+  attributed units add 2 facts on top of it. Not changed: the value is the owner's decision.
+- **Length retries:** only tweets over 280 characters (Kulikovo: no retry; Soviet: 2 of 3 first
+  drafts), never the tweet count and never the minimum. One chosen Soviet draft goes out
+  with a tweet of 291 characters and `length_violations`, reported (the style loop chose its
+  first attempt: `length` is a report-only rule, see "Found outside the task" in HIS-40).
+- **Selection in the loop:** the log line `thread facts total offered offered_assertable` is
+  identical in all 3 writer calls of every sample (Kulikovo 26 / 20 / 12 / 10, Soviet 24 / 21 / 13
+  / 11): regeneration got the same set.
+- **Attributed units:** Kulikovo F21 (the duel, claimed) was used in 3 of 3 threads, always with
+  its attribution («По преданию, ...», «По легенде, ...»); F22 (the myth of invincibility, claimed)
+  in 0 of 3. Soviet F22 (rebutted) was used in 3 of 3 with its rebuttal («Во многих источниках
+  указывалось, ... На деле это предложение было отвергнуто», «Часто пишут, ... На деле ...»);
+  F23 (Magnitogorsk, claimed) in 2 of 3 («По преданию, ...», «... называют классическим
+  моногородом: по этой версии ...»). Observed: the critic flagged one of those wordings
+  (`По преданию, Магнитогорск ...`) as `unsupported_claim`, and another as `cliche`, in the
+  chosen drafts. Not investigated here.
+- **Reading:** tighter and shorter than in HIS-40, still a list of facts rather than a story.
+  Kulikovo runs: the battle and its place, Ягайло, the legend of the duel, the ambush regiment,
+  the participants, a closing line about unity of Rus; the participants come after the decisive
+  moment, and every sample opens with a long sentence of a date, a place and two commanders. The
+  Soviet threads are a catalogue of working hours, the continuous week, a congress of 1929,
+  architecture, the 30 February myth, Magnitogorsk and the decree of 1940, with no line. The cap
+  does not make a story; it only makes a short list.
+- **Lost facts:** Kulikovo: the disputed arrival of Mamai (7 or 8 September), the foggy morning and
+  the second claimed fact were not offered, so the thread has no dispute at all; the nickname
+  Донской only in one thread. Soviet: 10 of the 21 assertable facts were not offered, none of them
+  evaluated for importance (the selection is positional).
 
 ### Bot delivery
 
