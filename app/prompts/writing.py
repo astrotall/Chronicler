@@ -5,6 +5,7 @@ from app.config.constants import (
     LONG_PARAGRAPH_CHARS,
     LONG_TYPICAL_SIZE_MULTIPLIER,
     THREAD_MIN_TWEETS,
+    THREAD_TYPICAL_SIZE_MULTIPLIER,
 )
 from app.domain.draft import (
     LengthIssue,
@@ -13,6 +14,7 @@ from app.domain.draft import (
     PostFormat,
     Revision,
     SentenceBudget,
+    ThreadSize,
 )
 from app.domain.fact import ClaimStance, Fact, FactSet, FactStatus
 from app.domain.llm import Message, Role
@@ -75,12 +77,22 @@ LONG_MIN_FACTS_CLAUSE = (
 )
 NO_LONG_SIZE = LongSize(min_chars=0, min_facts=0)
 THREAD_FORMAT_RULE = (
-    "Format: a thread of {min_tweets} to {max_tweets} tweets in the field tweets. Split at "
-    "meaning boundaries, never in the middle of a sentence. A tweet may be one short "
+    "Format: a thread of {min_tweets} to {max_tweets} tweets in the field tweets.{size} Split "
+    "at meaning boundaries, never in the middle of a sentence. A tweet may be one short "
     "sentence and needs no closing line of its own, but it is never a fragment: the reader "
     "can tell who and what it is about. Each tweet has at most {max_chars} characters "
     "including spaces. Do not number the tweets."
 )
+THREAD_TYPICAL_SIZE_CLAUSE = " A thread usually has from {min_tweets} to {typical_max} tweets."
+THREAD_MIN_FACTS_CLAUSE = (
+    " Develop at least {min_facts} of the facts you may state across the thread. Keep related "
+    "facts together in one tweet by meaning: it is not one fact per tweet."
+)
+THREAD_CEILING_CLAUSE = (
+    " The maximum of {max_tweets} tweets is a ceiling, not a target. Do not pad the thread, "
+    "and do not shrink it to a summary of two or three tweets."
+)
+NO_THREAD_SIZE = ThreadSize(min_tweets=0, min_facts=0)
 EXAMPLES_PROMPT = (
     "Reference posts by the author. They show the rhythm and the manner only. Do not copy "
     "their wording, their topics or their facts: a fact from an example is not a fact you "
@@ -124,6 +136,16 @@ EXPAND_CORRECTION_TEMPLATE = (
     "state.{unused} Retell each fact in your own words. Do not pad the text, and do not add "
     "anything that no fact states. Reply with the same json shape."
 )
+THREAD_EXPAND_CORRECTION_TEMPLATE = (
+    "The thread is too small. It has {tweets} tweets and uses {facts} of the facts you may "
+    "state; the minimum is {min_tweets} tweets and {min_facts} facts.\n{problems}\n"
+    "Rewrite it as a developed thread: expand the text and use more of the facts you may "
+    "state.{unused} Keep related facts together in one tweet by meaning, do not make it one "
+    "fact per tweet. Retell each fact in your own words. Do not pad the thread, and do not "
+    "add anything that no fact states. Each tweet has at most {max_chars} characters "
+    "including spaces. Reply with the same json shape."
+)
+TOO_FEW_PARTS_LINE = "- {actual} tweets, the minimum is {limit}"
 TOO_SHORT_LINE = "- {actual} characters, the minimum is {limit}"
 TOO_FEW_FACTS_LINE = "- {actual} facts used, the minimum is {limit}"
 UNUSED_FACTS_CLAUSE = " Facts not used yet: {ids}."
@@ -152,12 +174,27 @@ def long_rule(max_chars: int, long_size: LongSize) -> str:
     return LONG_SIZED_FORMAT_RULE.format(size=size, max_chars=max_chars)
 
 
+def thread_size_clause(max_tweets: int, thread_size: ThreadSize) -> str:
+    if not thread_size.min_tweets and not thread_size.min_facts:
+        return ""
+    clause = ""
+    typical_max = min(thread_size.min_tweets * THREAD_TYPICAL_SIZE_MULTIPLIER, max_tweets)
+    if thread_size.min_tweets and typical_max > thread_size.min_tweets:
+        clause += THREAD_TYPICAL_SIZE_CLAUSE.format(
+            min_tweets=thread_size.min_tweets, typical_max=typical_max
+        )
+    if thread_size.min_facts:
+        clause += THREAD_MIN_FACTS_CLAUSE.format(min_facts=thread_size.min_facts)
+    return clause + THREAD_CEILING_CLAUSE.format(max_tweets=max_tweets)
+
+
 def format_rule(
     post_format: PostFormat,
     max_chars: int,
     max_tweets: int,
     budget: SentenceBudget,
     long_size: LongSize,
+    thread_size: ThreadSize,
 ) -> str:
     match post_format:
         case PostFormat.SHORT:
@@ -170,7 +207,10 @@ def format_rule(
             return long_rule(max_chars, long_size)
         case PostFormat.THREAD:
             return THREAD_FORMAT_RULE.format(
-                min_tweets=THREAD_MIN_TWEETS, max_tweets=max_tweets, max_chars=max_chars
+                min_tweets=max(THREAD_MIN_TWEETS, thread_size.min_tweets),
+                max_tweets=max_tweets,
+                size=thread_size_clause(max_tweets, thread_size),
+                max_chars=max_chars,
             )
 
 
@@ -269,6 +309,7 @@ def render_writing(
     max_tweets: int,
     budget: SentenceBudget,
     long_size: LongSize = NO_LONG_SIZE,
+    thread_size: ThreadSize = NO_THREAD_SIZE,
     examples: Sequence[str] = (),
     angle: str | None = None,
     revision: Revision | None = None,
@@ -293,7 +334,9 @@ def render_writing(
         Message(
             role=Role.SYSTEM,
             content=WRITING_SYSTEM_PROMPT.format(
-                format_rule=format_rule(post_format, max_chars, max_tweets, budget, long_size),
+                format_rule=format_rule(
+                    post_format, max_chars, max_tweets, budget, long_size, thread_size
+                ),
                 style_rules=render_style_rules(),
             ),
         )
@@ -321,6 +364,8 @@ def violation_line(violation: LengthViolation) -> str:
             return TOO_SHORT_LINE.format(actual=violation.actual, limit=violation.limit)
         case LengthIssue.TOO_FEW_FACTS:
             return TOO_FEW_FACTS_LINE.format(actual=violation.actual, limit=violation.limit)
+        case LengthIssue.TOO_FEW_PARTS:
+            return TOO_FEW_PARTS_LINE.format(actual=violation.actual, limit=violation.limit)
 
 
 def render_length_correction(violations: Sequence[LengthViolation]) -> Message:
@@ -340,6 +385,35 @@ def render_expand_correction(
     return Message(
         role=Role.USER,
         content=EXPAND_CORRECTION_TEMPLATE.format(problems=problems, unused=unused),
+    )
+
+
+def render_thread_expand_correction(
+    violations: Sequence[LengthViolation],
+    unused_fact_ids: Sequence[str],
+    *,
+    tweets: int,
+    facts: int,
+    size: ThreadSize,
+    max_chars: int,
+) -> Message:
+    problems = LINE_SEPARATOR.join(violation_line(violation) for violation in violations)
+    unused = (
+        UNUSED_FACTS_CLAUSE.format(ids=ID_LIST_SEPARATOR.join(unused_fact_ids))
+        if unused_fact_ids
+        else ""
+    )
+    return Message(
+        role=Role.USER,
+        content=THREAD_EXPAND_CORRECTION_TEMPLATE.format(
+            tweets=tweets,
+            facts=facts,
+            min_tweets=size.min_tweets,
+            min_facts=size.min_facts,
+            problems=problems,
+            unused=unused,
+            max_chars=max_chars,
+        ),
     )
 
 

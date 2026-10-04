@@ -260,10 +260,17 @@ def length_warning(violation: LengthViolation, post_format: PostFormat) -> str:
             detail = messages.LENGTH_TOO_MANY_PARTS_TEMPLATE.format(
                 actual=violation.actual, limit=violation.limit
             )
-        case LengthIssue.TOO_FEW_FACTS:
-            detail = messages.LENGTH_TOO_FEW_FACTS_TEMPLATE.format(
+        case LengthIssue.TOO_FEW_PARTS:
+            detail = messages.LENGTH_TOO_FEW_PARTS_TEMPLATE.format(
                 actual=violation.actual, limit=violation.limit
             )
+        case LengthIssue.TOO_FEW_FACTS:
+            template = (
+                messages.LENGTH_THREAD_TOO_FEW_FACTS_TEMPLATE
+                if post_format is PostFormat.THREAD
+                else messages.LENGTH_TOO_FEW_FACTS_TEMPLATE
+            )
+            detail = template.format(actual=violation.actual, limit=violation.limit)
         case LengthIssue.TOO_SHORT:
             detail = messages.LENGTH_TOO_SHORT_TEMPLATE.format(
                 part=part_name(post_format, violation.part),

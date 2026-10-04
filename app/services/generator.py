@@ -25,16 +25,19 @@ from app.domain.draft import (
     PostFormat,
     Revision,
     SentenceBudget,
+    ThreadSize,
 )
 from app.domain.fact import FactSet
 from app.domain.llm import Message, Role
 from app.llm.client import LLMClient
 from app.prompts.writing import (
     NO_LONG_SIZE,
+    NO_THREAD_SIZE,
     assertable_facts,
     render_expand_correction,
     render_length_correction,
     render_short_correction,
+    render_thread_expand_correction,
     render_writing,
 )
 from app.services.disputes import with_disputed_facts
@@ -59,7 +62,12 @@ MAX_TOKENS: dict[PostFormat, int] = {
 }
 
 
-SIZE_ISSUES = frozenset({LengthIssue.TOO_SHORT, LengthIssue.TOO_FEW_FACTS})
+LENGTH_ISSUE_SEPARATOR = ","
+LENGTH_ISSUE_TEMPLATE = "{issue}={actual}/{limit}"
+PART_LENGTH_ISSUE_TEMPLATE = "{issue}#{part}={actual}/{limit}"
+SIZE_ISSUES = frozenset(
+    {LengthIssue.TOO_SHORT, LengthIssue.TOO_FEW_FACTS, LengthIssue.TOO_FEW_PARTS}
+)
 
 
 class SingleReply(BaseModel):
@@ -97,11 +105,19 @@ class WritingLimits(BaseModel):
     short_drop_tail: bool = False
     long_min_chars: int = Field(default=0, ge=0)
     long_min_used_facts: int = Field(default=0, ge=0)
+    thread_min_tweets: int = Field(default=0, ge=0)
+    thread_min_used_facts: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def require_long_range(self) -> Self:
         if self.long_min_chars > self.long_max_chars:
             raise ValueError("the long minimum must not exceed the long limit")
+        return self
+
+    @model_validator(mode="after")
+    def require_thread_range(self) -> Self:
+        if self.thread_min_tweets > self.thread_max_tweets:
+            raise ValueError("the thread minimum must not exceed the tweet maximum")
         return self
 
     @model_validator(mode="after")
@@ -124,6 +140,8 @@ class WritingLimits(BaseModel):
             short_drop_tail=settings.short_drop_tail,
             long_min_chars=settings.long_min_chars,
             long_min_used_facts=settings.long_min_used_facts,
+            thread_min_tweets=settings.thread_min_tweets,
+            thread_min_used_facts=settings.thread_min_used_facts,
         )
 
     def part_max_chars(self, post_format: PostFormat) -> int:
@@ -202,6 +220,56 @@ def long_size(post_format: PostFormat, limits: WritingLimits, prompt_facts: Fact
         min_chars=limits.long_min_chars,
         min_facts=min(limits.long_min_used_facts, len(assertable_facts(prompt_facts))),
     )
+
+
+def thread_size(
+    post_format: PostFormat, limits: WritingLimits, prompt_facts: FactSet
+) -> ThreadSize:
+    if post_format is not PostFormat.THREAD:
+        return NO_THREAD_SIZE
+    assertable = len(assertable_facts(prompt_facts))
+    min_facts = min(limits.thread_min_used_facts, assertable)
+    return ThreadSize(
+        min_tweets=min(limits.thread_min_tweets, min_facts or assertable),
+        min_facts=min_facts,
+    )
+
+
+def describe_violations(violations: Sequence[LengthViolation]) -> str:
+    return LENGTH_ISSUE_SEPARATOR.join(
+        (
+            LENGTH_ISSUE_TEMPLATE.format(
+                issue=violation.issue.value, actual=violation.actual, limit=violation.limit
+            )
+            if violation.part is None
+            else PART_LENGTH_ISSUE_TEMPLATE.format(
+                issue=violation.issue.value,
+                part=violation.part,
+                actual=violation.actual,
+                limit=violation.limit,
+            )
+        )
+        for violation in violations
+    )
+
+
+def check_thread_size(
+    parts: Sequence[DraftPart], used_fact_ids: Sequence[str], size: ThreadSize
+) -> list[LengthViolation]:
+    violations: list[LengthViolation] = []
+    if len(parts) < size.min_tweets:
+        violations.append(
+            LengthViolation(
+                issue=LengthIssue.TOO_FEW_PARTS, actual=len(parts), limit=size.min_tweets
+            )
+        )
+    if len(used_fact_ids) < size.min_facts:
+        violations.append(
+            LengthViolation(
+                issue=LengthIssue.TOO_FEW_FACTS, actual=len(used_fact_ids), limit=size.min_facts
+            )
+        )
+    return violations
 
 
 def check_size(
@@ -284,7 +352,20 @@ def length_correction(
     post_format: PostFormat,
     limits: WritingLimits,
     unused: Sequence[str],
+    used_count: int,
+    size: ThreadSize,
 ) -> Message:
+    if post_format is PostFormat.THREAD and any(
+        violation.issue in SIZE_ISSUES for violation in violations
+    ):
+        return render_thread_expand_correction(
+            text_violations(parts, violations),
+            unused,
+            tweets=len(parts),
+            facts=used_count,
+            size=size,
+            max_chars=limits.text_max_chars(post_format),
+        )
     if any(violation.issue in SIZE_ISSUES for violation in violations):
         return render_expand_correction(violations, unused)
     if post_format is not PostFormat.SHORT:
@@ -332,11 +413,16 @@ def assess(
     fact_set: FactSet,
     prompt_facts: FactSet,
     size: LongSize,
+    thread: ThreadSize,
 ) -> Assessment:
     parts = build_parts(reply_texts(reply), post_format, limits)
     reported, unknown = collect_fact_ids(reply.fact_ids, fact_set)
     used = with_disputed_facts(reported, [part.text for part in parts], prompt_facts)
-    violations = [*check_length(parts, post_format, limits), *check_size(parts, used, size)]
+    violations = [
+        *check_length(parts, post_format, limits),
+        *check_size(parts, used, size),
+        *check_thread_size(parts, used, thread),
+    ]
     return Assessment(parts, reported, used, unknown, violations)
 
 
@@ -355,6 +441,7 @@ async def write_draft(
     framing = angle.strip() if angle is not None and angle.strip() else None
     prompt_facts = facts_for_prompt(fact_set, post_format, limits)
     size = long_size(post_format, limits, prompt_facts)
+    thread = thread_size(post_format, limits, prompt_facts)
     messages = render_writing(
         prompt_facts,
         post_format,
@@ -362,16 +449,25 @@ async def write_draft(
         max_tweets=limits.thread_max_tweets,
         budget=limits.short_budget,
         long_size=size,
+        thread_size=thread,
         examples=examples,
         angle=framing,
         revision=revision,
     )
     reply = await request_reply(client, messages, post_format)
     attempts = 1
-    assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size)
+    assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size, thread)
     for _ in range(limits.length_retries(post_format)):
         if not assessment.violations:
             break
+        logger.info(
+            "length retry format=%s attempt=%d parts=%d used_facts=%d violations=%s",
+            post_format,
+            attempts,
+            len(assessment.parts),
+            len(assessment.used),
+            describe_violations(assessment.violations),
+        )
         messages = [
             *messages,
             Message(role=Role.ASSISTANT, content=reply.model_dump_json()),
@@ -381,11 +477,13 @@ async def write_draft(
                 post_format,
                 limits,
                 unused_fact_ids(prompt_facts, assessment.used),
+                len(assessment.used),
+                thread,
             ),
         ]
         reply = await request_reply(client, messages, post_format)
         attempts += 1
-        assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size)
+        assessment = assess(reply, post_format, limits, fact_set, prompt_facts, size, thread)
     parts = assessment.parts
     violations = assessment.violations
     used = assessment.used

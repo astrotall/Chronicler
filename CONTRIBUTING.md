@@ -184,7 +184,7 @@ What was not verified, stated plainly.
 make check: pass / fail / not run
 make test: pass / fail / not run
 
-Closes <tracker-base-url>/browse/HIS-<n>
+Closes https://astrotall.atlassian.net/browse/HIS-<n>
 ```
 
 The `(HIS-<n>)` in the title is for Jira. The full URL in the body is for anyone, or any tool,

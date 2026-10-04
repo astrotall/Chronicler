@@ -1,6 +1,7 @@
 import logging
 from collections import Counter
 from collections.abc import Sequence
+from enum import StrEnum
 from typing import NamedTuple, Self
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,13 +14,13 @@ from app.config.constants import (
     STYLE_REGRESSION_FREE_FACTS,
 )
 from app.config.settings import Settings
-from app.domain.draft import Draft, Revision
+from app.domain.draft import Draft, Revision, ThreadSize
 from app.domain.fact import FactSet
 from app.domain.style import CriticStatus, StyleReport, StyleResult, StyleRule, Violation
 from app.llm.client import LLMClient
 from app.llm.errors import LLMError
 from app.prompts.style_critique import render_style_revision
-from app.services.generator import WritingLimits, write_draft
+from app.services.generator import WritingLimits, thread_size, write_draft
 from app.services.style_critic import CriticOutcome, critique_draft
 from app.services.style_filter import check_draft
 
@@ -39,6 +40,23 @@ FORBIDDEN_PHRASE_RULES: frozenset[StyleRule] = frozenset(
 REPORT_ONLY_RULES: frozenset[StyleRule] = frozenset({StyleRule.LENGTH})
 RULE_COUNT_SEPARATOR = ","
 RULE_COUNT_TEMPLATE = "{rule}={count}"
+CAUSE_SEPARATOR = "+"
+CAUSE_TEMPLATE = "{kind}={previous}>{current}"
+REASON_SEPARATOR = "|"
+NO_REASON = "none"
+
+
+class RegressionKind(StrEnum):
+    THREAD_PARTS = "thread_parts"
+    THREAD_FACTS = "thread_facts"
+    CHARS = "chars"
+    FACTS = "facts"
+
+
+class Regression(NamedTuple):
+    kind: RegressionKind
+    previous: int
+    current: int
 
 
 class StyleLimits(BaseModel):
@@ -94,17 +112,43 @@ def lost_too_much(previous: int, current: int, min_ratio: float, free: int) -> b
     return current < previous * min_ratio and previous - current > free
 
 
-def is_regression(previous: Draft, regenerated: Draft, limits: StyleLimits) -> bool:
-    return lost_too_much(
-        text_chars(previous),
-        text_chars(regenerated),
+def fell_below_minimum(previous: int, current: int, minimum: int) -> bool:
+    return current < minimum and current < previous
+
+
+def regression_causes(
+    previous: Draft, regenerated: Draft, limits: StyleLimits, size: ThreadSize
+) -> list[Regression]:
+    previous_parts, regenerated_parts = len(previous.parts), len(regenerated.parts)
+    previous_facts = len(previous.used_fact_ids)
+    regenerated_facts = len(regenerated.used_fact_ids)
+    previous_chars, regenerated_chars = text_chars(previous), text_chars(regenerated)
+    causes: list[Regression] = []
+    if fell_below_minimum(previous_parts, regenerated_parts, size.min_tweets):
+        causes.append(Regression(RegressionKind.THREAD_PARTS, previous_parts, regenerated_parts))
+    if fell_below_minimum(previous_facts, regenerated_facts, size.min_facts):
+        causes.append(Regression(RegressionKind.THREAD_FACTS, previous_facts, regenerated_facts))
+    if lost_too_much(
+        previous_chars,
+        regenerated_chars,
         limits.min_retained_chars_ratio,
         STYLE_REGRESSION_FREE_CHARS,
-    ) or lost_too_much(
-        len(previous.used_fact_ids),
-        len(regenerated.used_fact_ids),
+    ):
+        causes.append(Regression(RegressionKind.CHARS, previous_chars, regenerated_chars))
+    if lost_too_much(
+        previous_facts,
+        regenerated_facts,
         limits.min_retained_facts_ratio,
         STYLE_REGRESSION_FREE_FACTS,
+    ):
+        causes.append(Regression(RegressionKind.FACTS, previous_facts, regenerated_facts))
+    return causes
+
+
+def describe_regressions(causes: Sequence[Regression]) -> str:
+    return CAUSE_SEPARATOR.join(
+        CAUSE_TEMPLATE.format(kind=cause.kind.value, previous=cause.previous, current=cause.current)
+        for cause in causes
     )
 
 
@@ -177,18 +221,22 @@ async def review_style(
     angle: str | None = None,
     allow_closing_question: bool = False,
 ) -> StyleResult:
+    size = thread_size(draft.post_format, writing_limits, fact_set)
     evaluations = [await evaluate(critic, draft, fact_set, style_limits, allow_closing_question)]
     forbidden: list[str] = []
     regenerations = 0
     regeneration_failed = False
     regressions_rejected = 0
     after_regression = False
+    triggers: list[str] = []
+    rejected: list[str] = []
     while (
         needs_regeneration(evaluations[-1].report)
         and regenerations < style_limits.max_regenerations
     ):
         current = evaluations[-1]
         forbidden = forbidden_phrases(forbidden, current.report.violations)
+        triggers.append(rule_counts(current.report.violations) or NO_REASON)
         revision = Revision(
             instruction=render_style_revision(
                 current.report.violations, forbidden, after_regression=after_regression
@@ -212,7 +260,9 @@ async def review_style(
             regeneration_failed = True
             break
         regenerations += 1
-        if is_regression(current.draft, regenerated, style_limits):
+        causes = regression_causes(current.draft, regenerated, style_limits, size)
+        if causes:
+            rejected.append(describe_regressions(causes))
             regressions_rejected += 1
             after_regression = True
             continue
@@ -233,7 +283,8 @@ async def review_style(
     logger.info(
         "style reviewed format=%s attempts=%d chosen=%d regenerations=%d "
         "regeneration_failed=%s regressions_rejected=%d critic=%s violations=%d dangerous=%d "
-        "rules=%s critic_dropped=%d critic_withdrawn=%d critic_over_limit=%d",
+        "rules=%s critic_dropped=%d critic_withdrawn=%d critic_over_limit=%d "
+        "regeneration_triggers=%s regression_causes=%s",
         draft.post_format,
         result.attempts,
         result.chosen_attempt,
@@ -247,5 +298,7 @@ async def review_style(
         sum(evaluation.report.critic_dropped for evaluation in evaluations),
         sum(evaluation.report.critic_withdrawn for evaluation in evaluations),
         sum(evaluation.report.critic_over_limit for evaluation in evaluations),
+        REASON_SEPARATOR.join(triggers) or NO_REASON,
+        REASON_SEPARATOR.join(rejected) or NO_REASON,
     )
     return result
