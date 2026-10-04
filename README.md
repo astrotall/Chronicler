@@ -1,71 +1,144 @@
 # Chronicler
 
-A personal Telegram bot for the author of a history account on X. You send a topic. The bot
-researches it (Wikipedia ru/en, Tavily web search), pulls out atomic facts with sources, and
-writes a post or a thread in Russian using only those facts. The bot never publishes to X: you
-read the draft, check the sources under it, and post it yourself.
+<div align="center">
 
-The point of the design is that an LLM invents dates, numbers and quotes. So the bot does not go
-"request -> post". It goes "research -> facts with sources -> post only from facts", and code
-verifies the links in between.
+![Python](https://img.shields.io/badge/-Python_3.12-3776AB?logo=python&logoColor=white&style=for-the-badge)
+![aiogram](https://img.shields.io/badge/-aiogram_3-2CA5E0?logo=telegram&logoColor=white&style=for-the-badge)
+![Pydantic](https://img.shields.io/badge/-Pydantic_v2-E92063?logo=pydantic&logoColor=white&style=for-the-badge)
+![httpx](https://img.shields.io/badge/-httpx-1F6FEB?style=for-the-badge)
+![uv](https://img.shields.io/badge/-uv-DE5FE9?style=for-the-badge)
+![Ruff](https://img.shields.io/badge/-Ruff-D7FF64?logo=ruff&logoColor=black&style=for-the-badge)
+![mypy](https://img.shields.io/badge/-mypy_strict-2A6DB2?style=for-the-badge)
 
-## Pipeline
+</div>
 
-1. **Plan queries.** From the topic the model produces 3-5 search queries, in Russian and
-   English.
-2. **Research.** Sources return snippets for each query.
-3. **Extract facts.** The model pulls atomic facts in Russian, each with verbatim quotes from
-   the snippets. Code checks every quote really occurs in its snippet and every number of a fact
-   occurs in its quotes; what fails is dropped. Code marks a fact `confirmed` (2+ independent,
-   not weak domains) or `single`, a second model pass finds contradictions, and those facts become
-   `disputed`. A claim a source gives as a legend, a version or a common belief is `claimed`, one it
-   rebuts is `rebutted` with its rebuttal as a separate fact; code checks that the attribution is
-   visible next to the quote. Such claims are never confirmed and never stated as fact. Too few
-   facts is a result shown to the author, not a guess.
-4. **Write.** The model writes a short post, a long post or a thread strictly from the facts; the
-   topic only frames the post, and the post adds no conclusion or claim of importance the facts
-   do not state. Disputed facts are shown to the model apart and written cautiously. Code checks
-   the length (a retry, then the draft is marked; a short post is written from 3 facts picked by
-   code and is cut only if `SHORT_DROP_TAIL` is on; a long post has a minimum size and facts
-   count, and a draft below it gets one retry, then a warning) and warns about every number in
-   the post that is not among the facts.
-5. **Filter style.** Deterministic checks (dashes, banned phrases, invented experience, emoji,
-   hashtags, a closing question, length, numbers not among the facts), then an LLM critic that
-   reads the post against the facts (claims the facts do not state, ambiguous pronouns, filler
-   lines, cliches, rhetorical triplets, extra opinions). On a violation the post is regenerated
-   with the exact list of what to fix, up to 2 times; the best version goes out with whatever
-   violations are left. A regeneration that shrinks the post or drops most of its facts is
-   rejected and never chosen. A critic failure never loses the post, it is flagged.
-6. **Deliver.** Telegram receives the post, the facts with their sources underneath, and the
-   buttons "короче", "в тред", "другой заход", "ещё вариант".
+[![CI](https://github.com/astrotall/chronicler/actions/workflows/ci.yml/badge.svg)](https://github.com/astrotall/chronicler/actions/workflows/ci.yml)
 
-Details: [`.claude/docs/pipeline.md`](.claude/docs/pipeline.md).
+**Chronicler is a Telegram bot that turns a history topic into a fact-checked draft of a post or
+a thread in Russian; the user reviews the draft and publishes it by hand, and the bot never posts
+to any social network.**
 
-## Structure
+## About the project
+
+A language model invents dates, numbers and quotes. So the bot never goes "topic -> post". It
+goes "topic -> research -> facts with verbatim quotes -> post written only from those facts", and
+deterministic code checks the links in between. The model reads, selects and writes; it is never
+trusted to certify its own output.
+
+Key principles:
+
+- **Facts carry verbatim quotes, checked by code.** Every fact has one or more quotes from a source
+  snippet. Code checks that each quote really occurs in its snippet after typographic
+  normalisation; a fact with no verified quote is dropped.
+- **Numbers are checked twice.** Every number of a fact must occur in its quotes, and every number
+  of the post must occur among the facts. A number the code cannot match is a violation and the
+  post is rewritten.
+- **The stance of a source is kept.** A claim a source gives as a legend, a version or a common
+  belief is `claimed`; one it rebuts is `rebutted`, with the rebuttal as a separate fact. Code
+  checks that the attribution is visible next to the quote. Such claims are never stated as fact.
+- **Weak sources and a per-domain cap.** Video platforms, blog hosting, social networks and school
+  slide sites are marked weak: they never make a fact `confirmed` and sort lower. One domain may
+  hold at most 6 of the 20 facts. `confirmed` needs two independent, not weak domains.
+- **Disputed facts are marked.** A second model pass finds contradicting facts; they become
+  `disputed`, are written cautiously and are marked "СПОРНО" in the reply.
+- **Facts are ranked against the topic.** A third pass scores how well each fact answers the topic
+  and names its aspect. Facts about a source (an exhibition, a book, a researcher) and facts dated
+  outside the topic's period are set aside, with the period flag checked by code; aspects take turns
+  so one aspect does not fill the list.
+- **A style critic with regeneration.** Deterministic checks (dashes, banned phrases, emoji,
+  hashtags, a closing question, length, numbers) and a model critic (claims the facts do not
+  state, ambiguous pronouns, filler, cliches) drive up to 2 rewrites. A rewrite that drops most of
+  the text or the facts is rejected, so the post cannot collapse into one line.
+- **A human stays in the loop.** The bot delivers a draft, the facts and their links. Nothing is
+  published automatically.
+- **LLM providers behind one interface.** DeepSeek and Anthropic are plain `httpx` clients behind
+  one protocol, and the provider and model are chosen per pipeline step in config.
+
+## Architecture diagram
+
+```
+  Telegram message ("тред: Куликовская битва")
+        │
+        ▼
+ ┌──────────────┐   whitelist of Telegram IDs, format prefix, one job per user
+ │  app/bot     │
+ └──────┬───────┘
+        ▼
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │ app/services/pipeline.py                                             │
+ │                                                                      │
+ │  1. query planning ──► 3-5 queries (LLM: query_planning)             │
+ │  2. research ────────► snippets: Wikipedia ru/en, Tavily web search  │
+ │  3. facts ───────────► extraction (LLM: fact_extraction)             │
+ │                        ├─ code: quote check, number check, stance    │
+ │                        ├─ code: status, weak domains, domain cap     │
+ │                        ├─ LLM pass: contradictions -> disputed       │
+ │                        └─ LLM pass: relevance -> order, set aside    │
+ │  4. writing ─────────► draft (LLM: writing), code: length, numbers   │
+ │  5. style filter ────► code checks + critic (LLM: style_critique),   │
+ │                        up to 2 regenerations, regression guard       │
+ └──────┬───────────────────────────────────────────────────────────────┘
+        ▼
+ Telegram reply: the post (plain text), warnings, the facts with their
+ sources and status, buttons: короче · в тред · другой заход · ещё вариант
+```
+
+Code layers and the import direction:
+
+```
+ bot  ──►  services  ──►  llm        (provider clients: DeepSeek, Anthropic)
+                     └─►  research   (sources: Wikipedia, Tavily)
+
+ domain, config, prompts: leaves, importable from any layer
+```
+
+`llm` and `research` never import each other or `services`; `services` never imports `bot`.
+Details: [`.claude/docs/architecture.md`](.claude/docs/architecture.md).
+
+## Stack
+
+| Layer | Technology |
+|---|---|
+| Telegram | aiogram 3 (long polling) |
+| HTTP | httpx |
+| Validation, config | Pydantic v2, pydantic-settings |
+| LLM | DeepSeek, Anthropic (plain HTTP, no SDK) |
+| Research | Wikipedia API (ru, en), Tavily search API |
+| Storage | in memory (SQLite planned) |
+| Package manager | uv |
+| Code quality | ruff, mypy (strict), pytest, pytest-asyncio, respx |
+| CI | GitHub Actions |
+
+## Repository layout
 
 ```
 app/
-  bot/              aiogram handlers, keyboards, message formatting
-  llm/              LLM interface, Anthropic and DeepSeek clients
-  research/         research source interface, Wikipedia and Tavily clients
-  services/         pipeline steps: planning, facts, generator, style
-  prompts/          prompt templates
-  domain/           Pydantic models
-  config/           settings and constants
-  db/               appears later, SQLite
-  main.py           entry point, starts aiogram polling
-tests/
+  main.py              entry point: builds the clients and services, starts polling
+  bot/                 handlers, jobs and timeouts, progress message, formatting, Russian texts
+  services/            pipeline steps and the orchestration between them
+    query_planning.py  search queries from the topic
+    research.py        runs every source, filters domains, dedups snippets
+    facts.py           extraction, verification, contradiction and relevance passes
+    quote_check.py     quote and number checks
+    stance.py          attribution markers next to a quote
+    fact_selection.py  trust steps, relevance order, domain cap, limit
+    generator.py       writing step: length rules, number check
+    style_*.py         deterministic checks, critic, regeneration loop
+    pipeline.py        steps 1-5, outcomes, buttons
+    run_store.py       state behind a Protocol, in memory for now
+  llm/                 LLM client protocol, DeepSeek and Anthropic clients, per-step factory
+  research/            research source protocol, Wikipedia and Tavily clients
+  prompts/             prompt templates, kept apart from the code that calls them
+  domain/              Pydantic models shared by the layers
+  config/              settings, constants, style rule data, stance markers
+tests/                 unit tests with scripted fakes; live tests marked `integration`
+  fixtures/            recorded Wikipedia and Tavily responses for the source tests
 data/
-  examples/         reference posts for few-shot (may be empty)
-.claude/
-  docs/             pipeline, style rules, architecture, decisions
+  examples/            reference posts for few-shot (local, not tracked)
+  comparisons/         output of live test runs (local, not tracked)
+.claude/docs/          pipeline, style rules, architecture, decisions
+.githooks/pre-commit   make check and make test before every commit
 ```
-
-At the moment `app/` holds settings, the owner-only bot, the LLM client (`app/llm`, DeepSeek and
-Anthropic), the research sources (`app/research`, Wikipedia and Tavily), and in `app/services`
-every pipeline step and the orchestration between them (`app/services/pipeline.py`). The bot runs
-the whole pipeline: a topic in, a post with its facts and sources out. State is kept in memory;
-SQLite comes later.
 
 ## Running
 
@@ -74,284 +147,154 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync                       # install dependencies from uv.lock
 cp .env.example .env          # then fill in the values
-make setup-hooks              # once after cloning: turn on the git hooks
+make setup-hooks              # once per clone: turn on the git hooks
 make run                      # start the bot (aiogram polling)
 ```
 
-`make setup-hooks` points git at `.githooks/`, so every `git commit` first runs `make check` and
-`make test` and is blocked if either fails. It is a per-clone setting, so run it once after each
-clone.
+### Keys
 
-`.env` holds the secrets and is never committed:
+`.env` holds the secrets and is never committed. A missing or invalid variable stops the start
+with a message that names it.
 
-| Variable             | Meaning                                                            |
-| -------------------- | ------------------------------------------------------------------ |
-| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather                                           |
-| `OWNER_TELEGRAM_IDS` | Telegram IDs allowed to use the bot, comma-separated: `123,456`    |
-| `LOG_LEVEL`          | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`, default `INFO`  |
+| Variable | Required | Without it |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | yes | the bot does not start |
+| `OWNER_TELEGRAM_IDS` | yes | the bot does not start; IDs allowed to use the bot, comma-separated |
+| `DEEPSEEK_API_KEY` | while any step uses DeepSeek (the default) | the bot does not start |
+| `ANTHROPIC_API_KEY` | only if a step is moved to Anthropic | the bot does not start for that config |
+| `TAVILY_API_KEY` | no | web search is off, only Wikipedia is searched |
+| `WIKIPEDIA_CONTACT` | no | Wikipedia is off. An email or a page URL, sent only in the `User-Agent` header as the Wikimedia policy asks |
 
-A missing or invalid variable stops the start with a message naming it. Updates from any other
-Telegram ID are ignored without a reply and logged as one line without the message text. How to
-use the bot is in "Using the bot" below.
+With neither Wikipedia nor Tavily enabled, a topic is answered "no source enabled" before any model
+call. Messages from any Telegram ID outside the list are ignored without a reply.
 
 ### Using the bot
 
-Fill in `.env` (below), then `make run`. The bot answers only the Telegram IDs in
-`OWNER_TELEGRAM_IDS`; it never publishes anything.
+Send a topic as a plain message: `Куликовская битва`. The default format is a short post
+(`POST_DEFAULT_FORMAT`). A prefix picks another one: `тред: ...` for a thread, `лонг: ...` for a
+long post, `коротко: ...` for a short one. A command other than `/start` and a message without text
+get a hint; a message over 500 characters is refused as not a topic.
 
-**Send a topic** as a plain message: `Куликовская битва`. By default the bot writes a short post
-(`POST_DEFAULT_FORMAT`). Start the message with a prefix for another format: `тред: Куликовская
-битва`, `лонг: ...`, `коротко: ...`. A command other than `/start` and a message without text
-(photo, sticker, voice, file) get a hint; a message over 500 characters is refused as not a topic.
+While it works, one message shows the stage. One request runs at a time per user; a new one in the
+meantime is answered "ещё работаю". The reply comes in this order:
 
-**While it works** one message shows the stage (planning, sources, facts, writing, style check) and
-disappears when the post arrives. One request runs at a time: a new topic or a button in the
-meantime is answered "ещё работаю" and dropped. A run longer than `PIPELINE_TIMEOUT_SECONDS` is
-cancelled with a message.
+1. The post as plain text, ready to copy; a thread as one message per tweet.
+2. Warnings, if any: numbers not among the facts, length problems, style violations left after the
+   rewrites, a critic failure, a thread turned into a short post for lack of facts, a post that
+   leans on weak sources or uses a version or a rebutted claim.
+3. The facts with their status ("подтверждён", "один источник", **СПОРНО**, "версия",
+   "опровергнуто") and links to their sources, weak ones marked "слабый".
 
-**What comes back**, in this order:
+Buttons never search again; they rewrite from the same facts, and every new version goes through
+the style filter:
 
-1. The post as plain text, ready to copy; a thread comes as one message per tweet. A long post over
-   Telegram's 4096 characters comes in several messages, split between paragraphs.
-2. Warnings, only if there are any: numbers in the post that are not among the facts, a length
-   over the limit, style violations the filter could not remove (rule, fragment, explanation), the
-   critic did not check the text, a regeneration failed and the best version is shown, the end of
-   the post was cut, a thread became a short post because there were too few facts, or more than half
-   of the facts in the post stand on weak sources only, or the post uses a version or a rebutted
-   claim.
-3. The facts: each with its id, its status and links to its sources. "подтверждён" means two or
-   more independent domains that are not weak, "один источник" one domain or only weak ones, a
-   link marked "слабый" is a source from `FACTS_WEAK_DOMAINS`, **СПОРНО** that the sources contradict
-   each other, with the reason. "версия" marks a claim the source attributes to others, "опровергнуто"
-   one the source rebuts, with a link to the rebutting fact. The first answer lists the facts used in the post and the rest
-   separately, plus the sources that did not answer, if any.
+| Button | Effect |
+|---|---|
+| короче | a shorter version, same format and angle |
+| в тред | the same facts as a thread, shown only with enough facts |
+| другой заход | another angle (a person, a detail, a place, two facts side by side) |
+| ещё вариант | the same angle in other words |
 
-**Buttons** under the post never search again; they rewrite from the same facts, and every new
-version goes through the style check:
+When nothing comes out, the progress message turns into the reason: no source enabled, all sources
+down, nothing found, too few facts (with the facts found), or the step that failed.
 
-| Button        | Effect                                                                     |
-| ------------- | -------------------------------------------------------------------------- |
-| короче        | A shorter version, same format and angle                                   |
-| в тред        | The same facts as a thread. Shown only with at least `THREAD_MIN_FACTS` facts that can be stated |
-| другой заход  | Another angle (a person, a detail or number, a place, two facts side by side) and another first sentence. A short post keeps the same 3 facts |
-| ещё вариант   | The same angle in other words                                              |
+### Settings
 
-Under a new version only its facts are listed. After a restart old buttons answer that they are
-stale: send the topic again.
+Every setting with its default is in [`.env.example`](.env.example). The main groups:
 
-**When nothing comes out** the progress message turns into the reason: no source enabled, all
-sources down, nothing found, too few facts (with the counts and the facts found), or a step that
-failed (which one and why in a phrase).
+- **LLM:** `LLM_<STEP>_PROVIDER` and `LLM_<STEP>_MODEL` for the steps `QUERY_PLANNING`,
+  `FACT_EXTRACTION`, `WRITING`, `STYLE_CRITIQUE`; `DEEPSEEK_MODEL`, `ANTHROPIC_MODEL`; timeouts and
+  retries. Moving a step to another provider is a config change only.
+- **Research:** `WIKIPEDIA_MAX_ARTICLES`, `TAVILY_SEARCH_DEPTH` (`basic` costs 1 credit a query, so a
+  topic costs up to 5), `TAVILY_MAX_RESULTS`, `RESEARCH_ALLOWED_DOMAINS`,
+  `RESEARCH_BLOCKED_DOMAINS`.
+- **Facts:** `FACTS_MAX_FACTS` (20), `FACTS_MIN_FACTS` (3), `FACTS_WEAK_DOMAINS`,
+  `FACTS_MAX_PER_DOMAIN` (6), `FACTS_DOMAIN_GROUPS`, `FACTS_RELEVANCE_ENABLED` (true).
+- **Writing:** `SHORT_MAX_CHARS` (280), `SHORT_MAX_FACTS` (3), `LONG_MIN_CHARS`, `LONG_MAX_CHARS`,
+  `THREAD_TWEET_MAX_CHARS`, `THREAD_MAX_TWEETS`, `EXAMPLES_DIR`, `EXAMPLES_MAX`.
+- **Style filter:** `STYLE_CRITIC_ENABLED`, `STYLE_MAX_REGENERATIONS` (2), the regression ratios.
+- **Bot:** `POST_DEFAULT_FORMAT`, `THREAD_MIN_FACTS` (5), `PIPELINE_TIMEOUT_SECONDS` (600),
+  `STATE_MAX_RUNS` (20).
 
-| Variable                   | Meaning                                                              |
-| -------------------------- | -------------------------------------------------------------------- |
-| `POST_DEFAULT_FORMAT`      | `short` (default), `long` or `thread`, for a topic without a prefix  |
-| `THREAD_MIN_FACTS`         | Fewest facts that can be stated for a thread, 5 by default; fewer gives a short post |
-| `PIPELINE_TIMEOUT_SECONDS` | Longest run of a topic or a button, 600 by default                   |
-| `STATE_MAX_RUNS`           | Topics whose facts are kept for the buttons, 20 by default           |
+Reference posts for few-shot are `.md` files in `EXAMPLES_DIR`, one post per file. The folder may be
+empty: the post is then written without examples.
 
-The live test runs the whole pipeline without Telegram on two topics (a short post, then "в
-тред"), on DeepSeek, Tavily and Wikipedia; it needs `DEEPSEEK_API_KEY`, `TAVILY_API_KEY` and
-`WIKIPEDIA_CONTACT` and costs up to 10 Tavily credits. Counters, texts and the messages as the
-author sees them go to `data/comparisons/his8_*.json`:
+## Testing
 
 ```bash
-uv run pytest tests/test_pipeline_live.py -m integration -o log_cli=true --log-cli-level=INFO
+make test        # uv run pytest
 ```
 
-### LLM providers
+Unit tests never touch the network. Services run against a scripted fake LLM client
+(`tests/llm_helpers.py`) and fake sources; HTTP clients are tested with `respx` and recorded
+responses in `tests/fixtures`; the bot is tested through `Dispatcher.feed_update`.
 
-The bot calls a model on four pipeline steps: `query_planning`, `fact_extraction`, `writing`,
-`style_critique`. Each step has its own provider and model. By default every step runs on
-DeepSeek, so only `DEEPSEEK_API_KEY` is required.
-
-| Variable                       | Meaning                                                              |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `DEEPSEEK_API_KEY`             | DeepSeek key. Required while any step uses DeepSeek                  |
-| `ANTHROPIC_API_KEY`            | Anthropic key. Required only if some step uses Anthropic             |
-| `DEEPSEEK_MODEL`               | DeepSeek model for steps without their own model, `deepseek-flash`   |
-| `ANTHROPIC_MODEL`              | Anthropic model for steps without their own model, `claude-sonnet-5-5` |
-| `DEEPSEEK_THINKING`            | `true` turns on DeepSeek thinking mode, default `false`              |
-| `LLM_<STEP>_PROVIDER`          | `deepseek` or `anthropic`, for example `LLM_WRITING_PROVIDER`        |
-| `LLM_<STEP>_MODEL`             | Model for that step; empty means the provider's model above          |
-| `LLM_CONNECT_TIMEOUT_SECONDS`, `LLM_READ_TIMEOUT_SECONDS` | HTTP timeouts                             |
-| `LLM_ATTEMPT_TIMEOUT_SECONDS`  | Hard deadline for one request attempt, 300 by default                |
-| `LLM_MAX_RETRIES`              | Retries on network errors, 429 and 5xx, 3 by default                 |
-| `LLM_RETRY_BASE_DELAY_SECONDS`, `LLM_RETRY_MAX_DELAY_SECONDS` | Exponential pause between retries, and its cap |
-| `LLM_JSON_MAX_RETRIES`         | Extra attempts when a structured reply is not valid JSON, 2 by default |
-
-`DEEPSEEK_BASE_URL`, `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_VERSION` are in `.env.example` with
-their official values and normally stay as they are.
-
-To move the writing step to Anthropic, add two lines to `.env` and restart:
+Live tests call real APIs and are marked `integration`. `make test` excludes them (`addopts = -m
+'not integration'` in `pyproject.toml`). They need keys in the environment or `.env` and are skipped
+without them:
 
 ```bash
-LLM_WRITING_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
+uv run pytest -m integration                                   # all live tests
+uv run pytest tests/test_pipeline_live.py -m integration       # one of them
 ```
 
-Add `LLM_WRITING_MODEL=claude-opus-5-5` to pick a model other than `ANTHROPIC_MODEL`. No code
-changes. If a step uses a provider whose key is missing, the bot stops at startup and names the
-variable.
+| Live test | Needs | Cost |
+|---|---|---|
+| `test_llm_live.py` | a provider key | one short request per provider with a key |
+| `test_research_live.py` | nothing for Wikipedia; `TAVILY_API_KEY` for its Tavily test | 1 Tavily credit |
+| `test_facts_live.py`, `test_generator_live.py`, `test_long_live.py`, `test_style_live.py` | `DEEPSEEK_API_KEY` | DeepSeek calls only |
+| `test_pipeline_live.py`, `test_domain_trust_live.py` | DeepSeek, Tavily, `WIKIPEDIA_CONTACT` | up to 10 Tavily credits |
+| `test_stance_live.py`, `test_relevance_live.py` | DeepSeek; reuse research recorded in `data/comparisons` | DeepSeek calls only when the recording exists |
 
-Live tests send a short real request to each provider whose key is set (from the environment or
-`.env`); `make test` never runs them:
+Their reports go to `data/comparisons/`, which is not tracked.
+
+## Linters, types and git hooks
 
 ```bash
-uv run pytest -m integration
+make check       # ruff format --check, ruff check, mypy (strict, app and tests)
+make format      # ruff format and ruff check --fix
+make setup-hooks # git config core.hooksPath .githooks
 ```
 
-### Research sources
+mypy runs in strict mode with the Pydantic plugin, and there is no `Any`. After `make setup-hooks`,
+`.githooks/pre-commit` runs `make check` and then `make test` and blocks the commit on a failure.
+It changes and stages nothing and makes no network calls. `git commit --no-verify` skips it, but
+CI runs the same commands.
 
-The research step searches Wikipedia ru, Wikipedia en and Tavily. Each source is optional and is
-switched on by its own setting. A source whose setting is empty (or only spaces) is off, the bot
-logs a warning naming the variable, and the other sources keep working.
+## What CI runs
 
-| Variable                       | Meaning                                                              |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `WIKIPEDIA_CONTACT`            | Your email or a page URL. Empty means Wikipedia is off              |
-| `TAVILY_API_KEY`               | Tavily key. Empty means Tavily is off                                |
-| `WIKIPEDIA_MAX_ARTICLES`       | Articles read per query and edition, 2 by default                    |
-| `WIKIPEDIA_EXTRACT_MAX_CHARS`  | Length of one article's text, 6000 by default                        |
-| `TAVILY_SEARCH_DEPTH`          | `basic` (1 credit, default), `advanced` (2 credits), `fast`, `ultra-fast` |
-| `TAVILY_MAX_RESULTS`           | Results per query, 5 by default, at most 20                          |
-| `TAVILY_CHUNKS_PER_SOURCE`     | Chunks per page, 1 to 3, 3 by default. Not sent for `ultra-fast`     |
-| `RESEARCH_MAX_CONCURRENCY`     | Searches in flight at once, 5 by default                             |
-| `RESEARCH_SNIPPET_MAX_CHARS`   | Longest snippet kept, 8000 by default                                |
-| `RESEARCH_ALLOWED_DOMAINS`     | Comma-separated. If not empty, only these domains and their subdomains stay |
-| `RESEARCH_BLOCKED_DOMAINS`     | Comma-separated. These domains and their subdomains are dropped      |
-| `RESEARCH_CONNECT_TIMEOUT_SECONDS`, `RESEARCH_READ_TIMEOUT_SECONDS` | HTTP timeouts            |
+`.github/workflows/ci.yml` runs on every pull request, with read-only permissions, as two jobs on
+`ubuntu-latest`. Each checks out the code, installs Python 3.12 with `astral-sh/setup-uv`, runs
+`uv sync --locked`, and then:
 
-**Wikipedia.** It needs no key, but the Wikimedia User-Agent policy asks every client to say who
-runs it. Put your email or the URL of a page about you into `WIKIPEDIA_CONTACT`; it is sent in the
-`User-Agent` header and nowhere else. Leave it empty and Wikipedia stays off.
+- `check`: `make check`
+- `test`: `make test`
 
-**Tavily.** Sign up at [tavily.com](https://tavily.com), copy the key (it starts with `tvly-`) from
-the dashboard into `TAVILY_API_KEY`. The free plan has a monthly credit allowance; with the default
-`basic` depth one query costs 1 credit, so one topic costs up to 5. Without the key only Wikipedia
-works.
+Live tests never run in CI.
 
-The domain lists apply to every source, so an allow-list that does not include `wikipedia.org`
-also drops the Wikipedia snippets.
+## Status
 
-Live tests call Wikipedia (no key needed) and, if `TAVILY_API_KEY` is set, Tavily:
+- ✅ the whole pipeline from a Telegram message to a post with its facts and sources;
+- ✅ quote, number and stance checks by code; `confirmed`, `single`, `disputed` statuses;
+- ✅ weak domains, a per-domain cap and relevance ranking of the facts;
+- ✅ short posts, long posts and threads, with length rules and a regression guard;
+- ✅ deterministic style checks, a model critic and up to 2 regenerations;
+- ✅ DeepSeek and Anthropic behind one interface, provider per step;
+- ✅ ruff, mypy strict, unit tests, git hooks and CI;
+- ⏳ storage: state lives in memory, a restart loses the facts behind old buttons (SQLite planned);
+- ⏳ one user model: access is a whitelist of Telegram IDs, there are no accounts or per-user settings;
+- ⏳ the contradiction pass over-reports on sets full of plans and reversals, and a myth a page
+  states as its own conclusion is caught only by that pass;
+- ⏳ numbers written in words and Roman numerals are not checked; hook, rhythm and thread structure
+  are not checked at all;
+- ⏳ a fact merged from two different claims can look `confirmed`; there is no positive list of
+  trusted domains;
+- ⏳ images for posts are not implemented;
+- ⚠️ the quality of a draft depends on what the sources return and on the model: the bot prepares a
+  draft to review, not a finished text.
 
-```bash
-uv run pytest tests/test_research_live.py -m integration
-```
+Open questions and the reasons behind each decision: [`.claude/docs/decisions.md`](.claude/docs/decisions.md).
+The pipeline in detail: [`.claude/docs/pipeline.md`](.claude/docs/pipeline.md). Contributing:
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-### Fact extraction
-
-| Variable                 | Meaning                                                                   |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `FACTS_INPUT_MAX_CHARS`  | Total snippet text shown to the model, 60000 by default. Longer snippets are cut to a common cap |
-| `FACTS_MIN_QUOTE_CHARS`  | Shortest quote that counts as support, 20 by default                      |
-| `FACTS_MAX_FACTS`        | Most facts kept, 20 by default. Disputed facts are kept on top of it      |
-| `FACTS_MIN_FACTS`        | Fewest facts that can be stated for a post, 3 by default. Must not exceed `FACTS_MAX_FACTS` |
-| `FACTS_DOMAIN_GROUPS`    | Domains counted as one source: members separated by `,`, groups by `;`. Default `wikipedia.org,wikimedia.org,ruwiki.ru,wikiwand.com`. Empty means no groups |
-| `FACTS_WEAK_DOMAINS`     | Comma-separated domains and their subdomains that do not count as an independent source: video, blog hosting, social networks, Q&A, school presentations, AI slide makers (18 by default, see `.env.example`). Their pages stay in the snippets, are marked "слабый", cannot make a fact `confirmed` and sort below other facts. Empty turns the rule off. Not the same as `RESEARCH_BLOCKED_DOMAINS`, which drops a page before extraction |
-| `FACTS_MAX_PER_DOMAIN`   | Most facts one domain may hold among the facts that are not disputed, 6 by default. The cap yields when it would leave fewer than the larger of `FACTS_MIN_FACTS` and `THREAD_MIN_FACTS` |
-
-The live test sends two Wikipedia articles from `tests/fixtures` to DeepSeek and checks that
-verified facts come out; it needs `DEEPSEEK_API_KEY`:
-
-```bash
-uv run pytest tests/test_facts_live.py -m integration -o log_cli=true --log-cli-level=INFO
-```
-
-### Writing
-
-| Variable                  | Meaning                                                                  |
-| ------------------------- | ------------------------------------------------------------------------ |
-| `SHORT_MAX_CHARS`         | Longest short post, 280 by default                                       |
-| `SHORT_MAX_FACTS`         | Most facts a short post is written from, picked by code, 3 by default    |
-| `SHORT_SENTENCE_CHARS`    | Sentence length in the short post budget, 80 by default: 280 // 80 = 3 sentences |
-| `SHORT_LENGTH_RETRIES`    | Retries of an overlong short post, 2 by default (long and thread get 1)  |
-| `SHORT_DROP_TAIL`         | `true` drops trailing paragraphs or sentences of a short post still over the limit after the retries; default `false` |
-| `LONG_MAX_CHARS`          | Longest long post, 25000 by default (X Premium); a ceiling, not a target |
-| `LONG_MIN_CHARS`          | Shortest long post, 1200 by default (about 3 paragraphs); `0` turns the minimum off |
-| `LONG_MIN_USED_FACTS`     | Facts a long post must use, 6 by default, capped by the facts that can be stated; `0` turns it off |
-| `THREAD_TWEET_MAX_CHARS`  | Longest tweet of a thread, numbering included, 280 by default            |
-| `THREAD_MAX_TWEETS`       | Most tweets in a thread, 12 by default, at least 2                       |
-| `THREAD_NUMBERING`        | `true` adds `1/ `, `2/ `... before each tweet, default `false`           |
-| `EXAMPLES_DIR`            | Folder with reference posts, `data/examples` by default                  |
-| `EXAMPLES_MAX`            | Most reference posts in a prompt, 3 by default; `0` turns them off       |
-
-Reference posts are `.md` files in `EXAMPLES_DIR`, one post per file, taken in name order. The
-folder may be empty: the post is then written without examples. Lengths are counted as Python
-`len()`; X counts a link as 23 characters and an emoji as 2, so a post with links can be shorter
-on X than the count says.
-
-The live test writes 3 short posts and 2 threads per topic from two small hand-made fact sets
-with DeepSeek (2 and 2 with the author examples, skipped when `data/examples` is empty), checks
-their structure and that every part fits its limit with no tail dropped, and saves the drafts to
-`data/comparisons/generator_live_<topic>.json` (not committed); it needs `DEEPSEEK_API_KEY`:
-
-```bash
-uv run pytest tests/test_generator_live.py -m integration -o log_cli=true --log-cli-level=INFO
-```
-
-The long post live test (`tests/test_long_live.py`) writes 3 long posts per hand-made fact set
-(18 facts each, written from the model's knowledge: they check the form of the text, not its
-facts) through the whole writing and style loop with DeepSeek, and saves the texts, the counters
-and the fact set to `data/comparisons/his30_<topic>.json`:
-
-```bash
-uv run pytest tests/test_long_live.py -m integration -o log_cli=true --log-cli-level=INFO
-```
-
-### Style filter
-
-| Variable                    | Meaning                                                                |
-| --------------------------- | ---------------------------------------------------------------------- |
-| `STYLE_CRITIC_ENABLED`      | `false` turns the LLM critic off; the deterministic checks always run, default `true` |
-| `STYLE_MAX_REGENERATIONS`   | Most regenerations after a violation, 2 by default; `0` only reports    |
-| `STYLE_CRITIC_MAX_FINDINGS` | Most critic findings used per check, 10 by default; extra ones are dropped and counted |
-| `STYLE_MIN_RETAINED_CHARS_RATIO` | A regeneration that keeps less than this share of the characters is rejected, 0.6 by default |
-| `STYLE_MIN_RETAINED_FACTS_RATIO` | The same for the used facts, 0.6 by default |
-
-A regeneration is a regression only if it is under a ratio and has lost more than 100 characters
-(for the characters) or more than 1 fact (for the facts), so deleting one flagged sentence of a
-short post is never rejected. A rejected regeneration is never chosen, never becomes the text the
-next attempt starts from, and uses one of the `STYLE_MAX_REGENERATIONS`.
-
-The critic runs on the `style_critique` step (`LLM_STYLE_CRITIQUE_PROVIDER`). The banned phrases,
-the invented-experience phrases and the rules that weigh more when the best version is chosen
-are data in `app/config/style.py`, not environment variables.
-
-The live test runs the critic on the local HIS-21 drafts in `data/comparisons/` (skipped when
-they are missing) and reports which known defects it finds and what it flags on relatively clean
-drafts, then runs the whole filter on fresh and on known bad Kulikovo drafts. Results go to
-`data/comparisons/his7_*.json`; it needs `DEEPSEEK_API_KEY`:
-
-```bash
-uv run pytest tests/test_style_live.py -m integration -o log_cli=true --log-cli-level=INFO
-```
-
-## Before committing
-
-```bash
-make check    # ruff format check, ruff lint, mypy strict
-make test     # pytest
-make format   # ruff format and ruff check --fix, to repair what make check reports
-```
-
-After `make setup-hooks` the pre-commit hook runs both for you (a few seconds) and blocks the
-commit on a failure. It changes and stages nothing and makes no network calls; live
-(`integration`) tests never run in it. `git commit --no-verify` skips it, but CI runs the same two
-commands on every pull request (`.github/workflows/ci.yml`), so skipping only delays the failure.
-
-Never commit to `main` directly, and never push without asking. Branches, commits and pull
-requests, including the Jira `HIS-` key convention, are in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Project context
-
-Product overview, locked decisions and hard rules are in [CLAUDE.md](CLAUDE.md), which is also
-the index the AI assistant reads. The detailed guides live in [`.claude/docs/`](.claude/docs):
-
-- [pipeline.md](.claude/docs/pipeline.md): steps, data models, what code checks
-- [style-rules.md](.claude/docs/style-rules.md): rules for the text of a post
-- [architecture.md](.claude/docs/architecture.md): layers, import direction, interfaces
-- [decisions.md](.claude/docs/decisions.md): decisions taken and open questions
-
-Keep these in sync with the code.
+Test fixtures contain excerpts from Wikipedia, licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).

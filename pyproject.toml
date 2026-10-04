@@ -1,7 +1,7 @@
 [project]
 name = "chronicler"
 version = "0.1.0"
-description = "A personal Telegram bot that researches a topic and drafts a history post from sourced facts."
+description = "A Telegram bot that researches a history topic and drafts a fact-checked post from sourced facts."
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [

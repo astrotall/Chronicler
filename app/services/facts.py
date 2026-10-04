@@ -15,6 +15,8 @@ from app.config.constants import (
     FACT_CANDIDATES_MAX,
     FACT_EXTRACTION_MAX_TOKENS,
     FACT_ID_PREFIX,
+    RELEVANCE_CHECK_MAX_TOKENS,
+    RELEVANCE_MIN_FACTS,
     SNIPPET_ALIAS_PREFIX,
 )
 from app.config.settings import Settings
@@ -33,7 +35,18 @@ from app.domain.fact import (
 )
 from app.domain.snippet import Snippet
 from app.llm.client import LLMClient
+from app.llm.errors import LLMError
 from app.prompts.fact_extraction import render_dispute_check, render_fact_extraction
+from app.prompts.fact_relevance import render_relevance_check
+from app.services.fact_relevance import (
+    FactRelevance,
+    RelevanceCheck,
+    RelevanceReport,
+    cap_aspects,
+    check_period,
+    in_range,
+    score_of,
+)
 from app.services.fact_selection import Selection, select_facts
 from app.services.quote_check import QuoteCheck, check_quote, numbers_supported, text_segments
 from app.services.source_domain import is_weak_source, source_domain
@@ -133,6 +146,7 @@ class FactLimits(BaseModel):
     weak_domains: tuple[str, ...] = ()
     max_per_domain: int | None = Field(default=None, ge=1)
     domain_cap_floor: int = Field(default=0, ge=0)
+    relevance: bool = False
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Self:
@@ -145,6 +159,7 @@ class FactLimits(BaseModel):
             weak_domains=tuple(settings.facts_weak_domains),
             max_per_domain=settings.facts_max_per_domain,
             domain_cap_floor=max(settings.facts_min_facts, settings.thread_min_facts),
+            relevance=settings.facts_relevance_enabled,
         )
 
 
@@ -440,6 +455,40 @@ async def find_disputes(client: LLMClient, candidates: Sequence[CandidateCheck])
     )
 
 
+def collect_relevance(report: RelevanceReport, candidate_count: int) -> RelevanceCheck:
+    positions = {candidate_id(index + 1): index for index in range(candidate_count)}
+    scores: dict[int, FactRelevance] = {}
+    dropped = 0
+    for entry in report.facts:
+        index = positions.get(normalize_label(entry.id))
+        if index is None or index in scores or not in_range(entry.relevance):
+            dropped += 1
+            continue
+        scores[index] = score_of(entry)
+    return RelevanceCheck(scores=cap_aspects(scores), dropped=dropped, failed=not scores)
+
+
+async def find_relevance(client: LLMClient, topic: str, texts: Sequence[str]) -> RelevanceCheck:
+    if len(texts) < RELEVANCE_MIN_FACTS:
+        return RelevanceCheck()
+    messages = render_relevance_check(
+        topic, [(candidate_id(position + 1), text) for position, text in enumerate(texts)]
+    )
+    try:
+        report = await client.complete_json(
+            messages, RelevanceReport, max_tokens=RELEVANCE_CHECK_MAX_TOKENS
+        )
+    except LLMError as error:
+        logger.warning(
+            "fact relevance failed, the model order is kept error=%s", type(error).__name__
+        )
+        return RelevanceCheck(failed=True)
+    check = check_period(collect_relevance(report, len(texts)), topic, texts)
+    if check.failed:
+        logger.warning("fact relevance returned no valid entry, the model order is kept")
+    return check
+
+
 def restored_rebuttals(
     attributed: Sequence[int],
     rebuttals: Mapping[int, Sequence[int]],
@@ -466,10 +515,13 @@ def build_stats(
     rebuttals_proposed: int = 0,
     rebuttals_verified: int = 0,
     rebuttals_restored: int = 0,
+    relevance: RelevanceCheck | None = None,
 ) -> ExtractionStats:
     support = Counter(verdict for check in checks for verdict in check.support_verdicts)
     outcomes = Counter(check.verdict for check in checks)
     verified = [check for check in checks if check.verdict is CandidateVerdict.VERIFIED]
+    ranking = relevance or RelevanceCheck()
+    scores = ranking.scores.values()
     return ExtractionStats(
         snippets=snippets,
         snippets_truncated=snippets_truncated,
@@ -507,6 +559,15 @@ def build_stats(
         rebuttals_proposed=rebuttals_proposed,
         rebuttals_verified=rebuttals_verified,
         rebuttals_restored=rebuttals_restored,
+        relevance_scored=len(ranking.scores),
+        relevance_dropped=ranking.dropped,
+        relevance_failed=int(ranking.failed),
+        relevance_period_overruled=ranking.period_overruled,
+        facts_about_source=sum(score.about_source for score in scores),
+        facts_outside_period=sum(score.outside_period for score in scores),
+        facts_unrelated=sum(score.unrelated for score in scores),
+        facts_set_aside_off_topic=selection.set_aside_off_topic,
+        facts_off_topic_restored=selection.off_topic_restored,
         facts_kept=facts_kept,
     )
 
@@ -542,12 +603,19 @@ async def extract_facts(
     disputed = {index for dispute in dispute_check.disputes for index in dispute.members}
     open_indices = [index for index in range(len(verified)) if index not in disputed]
     attributed = [index for index in open_indices if verified[index].attributed]
+    pool = [index for index in open_indices if not verified[index].attributed]
+    relevance = (
+        await find_relevance(client, topic, [verified[index].text for index in pool])
+        if limits.relevance
+        else RelevanceCheck()
+    )
     selection = select_facts(
         verified,
-        [index for index in open_indices if not verified[index].attributed],
+        pool,
         max_facts=limits.max_facts,
         floor=max(limits.min_facts, limits.domain_cap_floor),
         max_per_domain=limits.max_per_domain,
+        relevance={pool[position]: score for position, score in relevance.scores.items()},
     )
     kept = list(selection.kept)
     restored = restored_rebuttals(attributed, result.rebuttals, set(kept) | disputed)
@@ -591,6 +659,7 @@ async def extract_facts(
         rebuttals_proposed=result.rebuttals_proposed,
         rebuttals_verified=sum(len(links) for links in result.rebuttals.values()),
         rebuttals_restored=len(restored),
+        relevance=relevance,
     )
     log_stats(stats)
     assertable_count = len(kept) + len(restored)

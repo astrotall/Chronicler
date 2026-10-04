@@ -105,6 +105,15 @@ class ExtractionStats(BaseModel):
     rebuttals_proposed: int = Field(default=0, ge=0)
     rebuttals_verified: int = Field(default=0, ge=0)
     rebuttals_restored: int = Field(default=0, ge=0)
+    relevance_scored: int = Field(default=0, ge=0)
+    relevance_dropped: int = Field(default=0, ge=0)
+    relevance_failed: int = Field(default=0, ge=0)
+    relevance_period_overruled: int = Field(default=0, ge=0)
+    facts_about_source: int = Field(default=0, ge=0)
+    facts_outside_period: int = Field(default=0, ge=0)
+    facts_unrelated: int = Field(default=0, ge=0)
+    facts_set_aside_off_topic: int = Field(default=0, ge=0)
+    facts_off_topic_restored: int = Field(default=0, ge=0)
     facts_kept: int = Field(default=0, ge=0)
 
     @property

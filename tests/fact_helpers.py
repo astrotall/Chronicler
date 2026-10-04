@@ -67,6 +67,7 @@ def make_limits(
     weak_domains: tuple[str, ...] = (),
     max_per_domain: int | None = None,
     domain_cap_floor: int = 0,
+    relevance: bool = False,
 ) -> FactLimits:
     return FactLimits(
         input_max_chars=input_max_chars,
@@ -77,6 +78,7 @@ def make_limits(
         weak_domains=weak_domains,
         max_per_domain=max_per_domain,
         domain_cap_floor=domain_cap_floor,
+        relevance=relevance,
     )
 
 

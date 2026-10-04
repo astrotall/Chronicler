@@ -19,6 +19,7 @@ htmlcov/
 !.env.example
 
 *.db
+*.sqlite
 *.sqlite3
 
 data/comparisons/

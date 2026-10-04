@@ -184,7 +184,7 @@ What was not verified, stated plainly.
 make check: pass / fail / not run
 make test: pass / fail / not run
 
-Closes https://astrotall.atlassian.net/browse/HIS-<n>
+Closes <tracker-base-url>/browse/HIS-<n>
 ```
 
 The `(HIS-<n>)` in the title is for Jira. The full URL in the body is for anyone, or any tool,
@@ -223,5 +223,5 @@ on every pull request as two jobs, `check` and `test`, with Python 3.12 through 
 A red CI is never merged. A change to dependencies in `pyproject.toml` ships together with the
 updated `uv.lock`.
 
-Who runs git: the author. Claude working in this repository does not commit, push, create
+Who runs git: the repository owner. Claude working in this repository does not commit, push, create
 branches or open pull requests (see [CLAUDE.md](CLAUDE.md) -> "Hard rules").

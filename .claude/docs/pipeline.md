@@ -10,7 +10,7 @@ own output. Every claim that matters is checked by deterministic code against a 
 
 ### 1. Query planning
 
-Input: the topic the author sent. Output: 3-5 search queries, in Russian and English.
+Input: the topic the user sent. Output: 3-5 search queries, in Russian and English.
 
 - LLM step: `query_planning`.
 - Response is validated by a Pydantic model; a malformed reply is a failure, not a guess.
@@ -27,7 +27,7 @@ Input: the queries. Output: a list of `Snippet`.
 - Sources run concurrently. A source that fails is logged and skipped; the pipeline continues
   with the others. The research step returns the snippets together with the list of failures
   and does not raise for a source error. If every source fails, the result has no snippets and
-  the pipeline stops with an error to the author.
+  the pipeline stops with an error to the user.
 - Snippets are deduplicated by normalised URL; of several snippets with one URL the longest text
   stays. Their text is cut to a configured length. Domain allow and block lists are applied first.
   Duplicates by text across different URLs are not removed.
@@ -58,6 +58,9 @@ Input: the topic and the snippets. Output: `FactsExtracted` (a `FactSet`) or `In
 - A second LLM pass on the same step looks for contradictions. It sees only the ids and texts of
   the verified facts, before the limit, and returns groups of contradicting facts with a short
   explanation and a verdict. Code turns the groups into `disputed`.
+- A third LLM pass on the same step ranks the facts that may be stated by how well they answer
+  the topic (HIS-27, see "Relevance" below). Code validates the reply, sets aside the facts off the
+  topic and orders the rest; the model never adds, rewrites or removes a fact.
 - Code sorts, applies the limit, assigns the ids `F1`, `F2`..., and decides whether there are
   enough facts.
 
@@ -222,10 +225,10 @@ A weak source is a page whose host equals a domain of `FACTS_WEAK_DOMAINS` or is
 (case, trailing dot, `www.`), but it is matched as a host and not as the last two labels, so
 `otvet.mail.ru` can be weak while `news.mail.ru` is not. The default list holds video platforms,
 blog hosting, social networks and Q&A sites, school presentation sites and AI slide generators;
-the author edits it in `.env`, an empty value turns the rule off.
+the user edits it in `.env`, an empty value turns the rule off.
 
 A weak source is not a blocked one. `RESEARCH_BLOCKED_DOMAINS` drops a page before extraction, so
-the model never sees it. A weak page stays in the snippets and in `Fact.support`, the author sees
+the model never sees it. A weak page stays in the snippets and in `Fact.support`, the user sees
 its link marked "слабый", but it is not an independent source:
 
 - `SourceRef.weak` is set by code at verification (default `False`, so older snapshots load).
@@ -248,7 +251,7 @@ its link marked "слабый", but it is not an independent source:
   the only defence against a myth that a page states as its own conclusion with no marker: the
   stance guard lowers such a fact to `asserted`, and no code links facts by their numbers. A `rebutted` fact is left out: its relation to its rebuttal is already known, and
   the pair would come back as a contradiction that makes the true rebuttal "СПОРНО".
-- Each reported group has ids, an explanation in Russian for the author, and a verdict
+- Each reported group has ids, an explanation in Russian for the user, and a verdict
   `contradiction`. The verdict comes after the explanation, so the model reasons first; a group
   with `contradiction: false` is withdrawn. Without it the model reported sequences of events
   ("given, taken away, returned") as contradictions.
@@ -257,12 +260,60 @@ its link marked "слабый", but it is not an independent source:
   kept in `FactSet.disputes` with the final ids.
 - An LLM error or an invalid reply is not caught; it propagates as in every other step.
 
+#### Relevance
+
+Found in live runs (HIS-27): the extraction model returns facts grouped by snippet, not by
+relevance, so the limit kept the first ones and a short post on the Soviet daily life topic was
+written from three facts about an exhibition. Most relevant facts were lost at the cut, not at the
+search. The diagnosis is in [decisions.md](decisions.md), "Topic relevance".
+
+- **Input.** The topic and `C1: text` lines of the facts that may be stated: verified, not
+  disputed, not attributed. Never quotes, URLs or statuses. The topic is a frame, not a source.
+  The pass runs after the contradiction pass and before the sort, only when
+  `FACTS_RELEVANCE_ENABLED` is on (default) and there are at least 2 such facts.
+- **Reply.** For each fact: `id`, `aspect` (1 to 3 Russian words naming the part of the topic),
+  `about_source`, `outside_period`, and `relevance` 0 to 3 last (3 answers the topic, 2 useful
+  context, 1 marginal or a repeat of a fuller fact, 0 not about the topic or no claim at all, such
+  as a fact whose text is «Опровергнуто»).
+- **`about_source` is narrow:** a fact about a page, an exhibition, a book, a publication, an author
+  or a researcher (who they are, that the subject is topical, what the materials help to see). A
+  fact about the name, the definition or the history of the subject, a fact that names who reports
+  or estimates something about it (historians, a chronicle, a life of a saint) and a fact about how
+  it is remembered are about the subject. The prompt gives neutral examples of both kinds.
+- **Code validates.** Ids are matched like snippet labels; an unknown id, a repeated id (the first
+  entry stays) and a relevance outside 0..3 drop the entry, counted in `relevance_dropped`. A fact
+  with no valid entry counts as relevance 2 with the aspect `other`. Aspects are normalised (case,
+  whitespace); the first `RELEVANCE_MAX_ASPECTS` (8) distinct ones in fact order keep their names,
+  the rest become `other`, so a model that gives every fact its own aspect cannot defeat the turns
+  below.
+- **Code checks `outside_period`.** The model set it on facts dated inside the period («отменят уже в
+  1935 году» for the 1930s), on direct causes and consequences (1929, 1940), and on a topic with no
+  period at all. The flag stands only if the topic names years in digits (`1930-е`, `1930-х`,
+  `1930s`, `в 1380 году`, `1914-1918`), the fact has at least one year (a number from 1000 to 2100),
+  and every year of the fact is outside the topic's years widened by
+  `RELEVANCE_PERIOD_MARGIN_YEARS` (10) on each side; a decade covers its ten years. Otherwise the flag
+  is dropped and counted in `relevance_period_overruled`. A topic with a Roman-numeral century or no
+  year never sets a fact aside as outside its period. Known limit: a count between 1000 and 2100
+  («1200 рабочих») reads as a year; it can only confirm a flag the model already set.
+- **Fallback.** An `LLMError` (an invalid reply after the client's retries included) or a reply with
+  no valid entry keeps the model's order exactly, as before HIS-27: logged at WARNING with the error
+  class, `relevance_failed` is 1. The extraction is never lost for the ranking.
+
 #### Limit, minimum and ids
 
+- **Off the topic is set aside.** A fact with `about_source`, a confirmed `outside_period` or
+  relevance 0 does not enter the sort, the cap or the limit, whatever its status: a fact not about
+  the subject is not wanted however well it is sourced. It comes back only for the floor below,
+  after the facts the cap set aside, in priority order, and is placed after every other kept fact.
 - Facts that are not disputed are sorted in three steps: `confirmed`, then `single` with at least
   one non-weak source, then `single` with weak sources only (`fact_priority` in
-  `app/services/fact_selection.py`), keeping the model's order inside a step. A weak fact is never
-  removed for being weak, it only goes lower.
+  `app/services/fact_selection.py`). The trust step stays the first key. Inside a step
+  (`rank_order`): relevance 3, then 2, then 1; among the facts of one relevance of 2 or more the
+  aspects take turns (the first fact of each aspect, then the second of each, and so on, in the
+  model's order), so ten facts on one aspect do not fill the limit; facts of relevance 1 follow in
+  the model's order. Without a ranking every fact counts as relevance 2 of one aspect and the order
+  is the model's order inside a step, as before. A weak fact is never removed for being weak, it
+  only goes lower.
 - **Domain cap.** `FACTS_MAX_PER_DOMAIN` (6) limits how many places one domain takes among the
   facts that are not disputed. Walking the sorted list, a fact is accepted if at least one of its
   domains has room, and it is charged to the least loaded of its non-weak domains (of all its
@@ -275,7 +326,7 @@ its link marked "слабый", but it is not an independent source:
   priority order until the floor is reached. This way the cap never turns a requested thread into a
   short post and never alone causes `InsufficientFacts`. The floor does not invent facts: a set
   that is short without the cap stays short.
-- Disputed facts are always kept, on top of the limit, so the author sees them.
+- Disputed facts are always kept, on top of the limit, so the user sees them.
 - Attributed facts (not disputed) never enter the sort, the cap or the limit: they are kept on top
   of the limit, like disputed facts. A rebuttal cut by the limit or the cap comes back with its
   claim (`rebuttals_restored`), so a rebutted claim is never shown without its rebuttal.
@@ -290,6 +341,11 @@ its link marked "слабый", but it is not an independent source:
   `support_weak`, `facts_weak_only`, `facts_lost_confirmed_by_weak` (would be `confirmed` by all
   domains, is `single` without the weak ones), `facts_cut_by_domain_cap` (left out by the cap, net
   of the facts that came back), `facts_domain_cap_restored`. Counters only, never domains or texts.
+- The relevance counters: `relevance_scored` (facts with a valid entry), `relevance_dropped`,
+  `relevance_failed`, `relevance_period_overruled`, `facts_about_source`, `facts_outside_period`
+  (after the code check), `facts_unrelated` (relevance 0), `facts_set_aside_off_topic` (net of the
+  facts the floor brought back) and `facts_off_topic_restored`. The facts set aside are not in the
+  `FactSet`; only these counters and the INFO line show them.
 - The stance counters: `facts_claimed`, `facts_rebutted` (over the verified facts),
   `facts_stance_unmarked`, `facts_stance_upgraded_by_code`, `facts_stance_role_swapped`,
   `facts_unknown_stance`, `rebuttals_proposed`, `rebuttals_verified`
@@ -329,14 +385,15 @@ job. An empty `FactSet` is a `ValueError` before any call.
   `long` and `thread` get the whole `FactSet`. The rules:
   1. Assertable facts (not disputed, not attributed), `confirmed` first, then `single`, in
      `FactSet` order inside each status. A short post never gets an attributed claim: three
-     sentences have no room for the attribution and the rebuttal. Step 3 already keeps the extraction model's order, which tends to open with the core
-     facts. The length of a fact's text is not used: short facts are mostly side details.
+     sentences have no room for the attribution and the rebuttal. Step 3 orders the facts by
+     trust, then by relevance and aspect (see "Relevance"), so a fact about a source never opens
+     the list and the first facts come from different aspects. The length of a fact's text is not used: short facts are mostly side details.
   2. A dispute enters only whole and only if it fits into the slots left. Overlapping disputes
      merge into one unit; disputed facts with no group form one unit. With the default limit and 3
      or more facts to state, a short post gets no dispute.
   3. If no fact to state was picked and no unit fits, the first unit is taken whole, over the
      limit: a dispute is never given half.
-  The prompt gets only the selection; the `FactSet` itself does not change, so the author still
+  The prompt gets only the selection; the `FactSet` itself does not change, so the user still
   sees every fact and every dispute. The number check still uses the whole `FactSet`; the
   disputed part of `used_fact_ids` uses only the selection (see "Used facts" below). A
   consequence: every angle ("другой заход") of a short post gets the same facts.
@@ -492,7 +549,7 @@ No dependency. Each phrase becomes a regular expression:
    with optional spaces; otherwise any run of characters that are neither letters nor sentence ends
    (`.!?…`). So a phrase never spans two sentences, and "не просто так" without ", а ..." passes.
 4. Case is ignored and `е` matches `ё`. The match runs on the original text, so the excerpt is
-   what the author wrote. Overlapping matches of one rule count once ("это не просто X, а Y" and
+   the text as written. Overlapping matches of one rule count once ("это не просто X, а Y" and
    "не просто X, а Y").
 
 `BANNED_PHRASE_EXACT_WORDS` holds "заключение": by stem, "в заключение" would also catch "в
@@ -520,7 +577,7 @@ No dependency. Each phrase becomes a regular expression:
   cautious wording of a dispute, the attribution an attributed claim carries («По преданию»),
   punctuation, emoji, hashtags, the closing question, length, digits,
   and the hook, rhythm and thread structure (rules 7, 8, 16 are not enforced automatically).
-- **Reply:** `findings`, each `excerpt`, `rule`, `explanation` (Russian, for the author, at most
+- **Reply:** `findings`, each `excerpt`, `rule`, `explanation` (Russian, for the user, at most
   `STYLE_CRITIC_EXPLANATION_MAX_CHARS`), then `violation`. The verdict comes last so the model
   reasons first; a finding with `violation: false` is withdrawn and counted. The rule is limited to
   the critic's rules by the schema; an excerpt is at most `STYLE_CRITIC_EXCERPT_MAX_CHARS`.
@@ -607,7 +664,7 @@ of steps 1-5 is `Pipeline` in `app/services/pipeline.py`; the Telegram side is `
 2. Steps 1-3. No snippets: `ResearchFailed` if every source failed at least once, otherwise
    `NothingFound`. `InsufficientFacts` becomes `NotEnoughFacts` with the counts of assertable and
    disputed facts and the facts themselves.
-3. The format is the one the author asked for (a prefix `тред:`, `лонг:`, `коротко:` in the
+3. The format is the one the user asked for (a prefix `тред:`, `лонг:`, `коротко:` in the
    message) or `POST_DEFAULT_FORMAT` (`short`). A thread with fewer than `THREAD_MIN_FACTS` (5)
    assertable facts (not disputed) becomes a short post and the outcome carries a
    `ThreadDowngrade`, which the bot shows as a warning.
@@ -656,7 +713,7 @@ In this order:
 
 The progress is one message, edited when the stage changes (at most 5 edits a run, under Telegram's
 edit rate). It is deleted after a post is delivered; on any other outcome it is edited into the
-message for the author. A failed edit or delete is logged and ignored. A `RetryAfter` while
+message for the user. A failed edit or delete is logged and ignored. A `RetryAfter` while
 sending is waited out once.
 
 #### Buttons
@@ -670,7 +727,7 @@ sending is waited out once.
 
 `Pipeline.rework(draft_id, action, progress)` reads the stored draft and its `FactSet`, re-enters at
 step 4 and runs step 5 on the result exactly as for the first post. Research is never re-run, so a
-click is cheap and the facts the author checked stay the same. A missing draft (restart, eviction)
+click is cheap and the facts the user checked stay the same. A missing draft (restart, eviction)
 is `DraftExpired`; "в тред" on too few facts is `ThreadUnavailable`, with no model call.
 
 Each angle says it sets only the presentation and the order of the facts, that every claim still
@@ -699,7 +756,7 @@ a button answers "кнопки устарели" instead of failing.
 - One job at a time per user (`JobRunner`, `app/bot/jobs.py`). A topic or a button during a job is
   answered at once with "ещё работаю" and dropped, not queued. A button is answered (`answer()`)
   before any work.
-- A job is cancelled after `PIPELINE_TIMEOUT_SECONDS` (600) and the author is told; the user is
+- A job is cancelled after `PIPELINE_TIMEOUT_SECONDS` (600) and the user is told; they are
   free again either way, including after an unexpected error.
 - A message starting with `/` other than `/start`, and any message without text (photo, sticker,
   voice, document), gets a short hint and starts nothing. A topic over `TOPIC_MAX_CHARS` (500), or
@@ -708,7 +765,7 @@ a button answers "кнопки устарели" instead of failing.
 
 #### Logs
 
-The topic is the author's data: INFO logs only its length and the requested format. One INFO line
+The topic is the user's data: INFO logs only its length and the requested format. One INFO line
 per run or button holds the outcome class. An unexpected error is logged with its class and the
 stack, never its message, because a `ValidationError` message carries input values. Texts of
 topics, posts, facts and quotes never reach the log.
@@ -724,9 +781,9 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `Fact`              | `id` (`F1`...), `text` in Russian, `support` (one or more verified `SourceRef`), `status`, `stance` (default `asserted`, so older snapshots load), `rebutted_by` (ids of the rebutting facts) |
 | `ClaimStance`       | `asserted`, `claimed`, `rebutted`: how the source presents the claim                                      |
 | `FactStatus`        | `confirmed`, `single`, `disputed`                                                                         |
-| `Dispute`           | `fact_ids` (2 or more) and an `explanation` in Russian for the author                                     |
+| `Dispute`           | `fact_ids` (2 or more) and an `explanation` in Russian for the user                                     |
 | `FactSet`           | `topic`, `facts`, `disputes`                                                                              |
-| `ExtractionStats`   | Counters only: snippets, candidates, support proposed and dropped by reason, facts dropped by reason, disputes, facts cut by the limit |
+| `ExtractionStats`   | Counters only: snippets, candidates, support proposed and dropped by reason, facts dropped by reason, disputes, facts cut by the limit, the relevance ranking and the facts set aside as off the topic |
 | `FactsExtracted`    | `outcome = extracted`, the `FactSet` and the stats                                                         |
 | `InsufficientFacts` | `outcome = insufficient_facts`, the `FactSet` of what survived, `assertable_count`, `required`, the stats |
 | `FactExtraction`    | `FactsExtracted \| InsufficientFacts`. A caller has to tell them apart; step 4 accepts only `FactsExtracted` |
@@ -735,14 +792,14 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `LengthViolation`   | `issue` (`part_too_long` or `too_many_parts`), the 1-based `part` or none, `actual` and `limit`            |
 | `SentenceBudget`    | `max_sentences` and `sentence_chars` of a short post, derived from `SHORT_MAX_CHARS` and `SHORT_SENTENCE_CHARS` |
 | `Revision`          | `instruction` and `previous` (the texts of the previous draft's parts), for "короче" and "ещё вариант"    |
-| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `length_violations` also holds `too_short` and `too_few_facts` for a long post under its minimum. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the author copies |
+| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `length_violations` also holds `too_short` and `too_few_facts` for a long post under its minimum. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the user copies |
 | `StyleRule`         | The rules a violation names: `dash`, `banned_phrase`, `invented_experience`, `emoji`, `hashtag`, `closing_question`, `length`, `unverified_number` (code) and `cliche`, `triplet`, `filler`, `opinion`, `unsupported_claim`, `ambiguous_reference` (critic; `invented_experience` too) |
-| `Violation`         | `rule`, `source` (`code` or `critic`), `part` (1-based or none), `excerpt` (from the text, none for length), `explanation` in Russian for the author |
+| `Violation`         | `rule`, `source` (`code` or `critic`), `part` (1-based or none), `excerpt` (from the text, none for length), `explanation` in Russian for the user |
 | `StyleReport`       | `violations`, `critic` (`checked`, `disabled`, `failed`), counters of critic findings dropped (excerpt not in the text), withdrawn and over the limit; `passed` is no violations |
 | `StyleResult`       | The `draft` that goes out, its `report`, `attempts` (versions evaluated), `chosen_attempt`, `regenerations`, `regeneration_failed` and `regressions_rejected` (regenerations the loop rejected as too destructive) |
 | `PipelineStage`     | `planning`, `research`, `facts`, `writing`, `style`: what the progress message shows and what a failure names |
 | `PostAction`        | The buttons: `shorter`, `thread`, `angle`, `variant`                                                      |
-| `FailureKind`       | The class of an `LLMError` for the author: `config`, `auth`, `request`, `rate_limit`, `unavailable`, `invalid_response`, `other` |
+| `FailureKind`       | The class of an `LLMError` for the user: `config`, `auth`, `request`, `rate_limit`, `unavailable`, `invalid_response`, `other` |
 | `StoredDraft`       | What a button needs: `draft_id`, `run_id`, the `FactSet`, the `Draft` and the `angle_index` it was written with |
 | `PostReady`         | `draft_id`, the `StyleResult`, the `FactSet`, the buttons to show, `variant`, research `failures`, an optional `ThreadDowngrade`, the `ExtractionStats` of the first post |
 | Other outcomes      | `NoSources`, `ResearchFailed`, `NothingFound`, `NotEnoughFacts` (the `InsufficientFacts`, the disputed count, failures), `StepFailed` (stage, kind), and for a button `DraftExpired` and `ThreadUnavailable`. `TopicOutcome` and `ReworkOutcome` are their unions |
@@ -770,6 +827,8 @@ the domain rules in step 3: language editions of Wikipedia and its mirrors are o
 | Which facts say the same thing                          | Model      | Needs language understanding                             |
 | Which facts contradict each other                       | Model      | Needs language understanding; code turns the mark into `disputed` |
 | How a source presents a claim (asserted, claimed, rebutted) | Model  | Needs language understanding                              |
+| How well a fact answers the topic, its aspect, whether it is about a source | Model | Needs language understanding; code validates ids and range |
+| A fact flagged outside the topic's period has only years outside it | Code | Year extraction and a range with a margin; an unconfirmed flag is dropped |
 | The attribution or rebuttal is visible next to the quote | Code      | Stem match of the markers in the quote's sentence and its neighbours |
 | An attributed claim is not stated as fact in the post   | Model      | The critic reads the post against the attributed claims block |
 | Numbers and dates in the post occur among the facts     | Code       | Extraction and set comparison                            |
@@ -783,12 +842,12 @@ the domain rules in step 3: language editions of Wikipedia and its mirrors are o
 
 A number the code cannot match to a fact is reported even if it happens to be correct. Step 5
 regenerates the post once it sees such a number; if the number survives the regenerations, the
-post still goes out with it listed, and the author decides.
+post still goes out with it listed, and the user decides.
 
 ## Failure behaviour
 
 - A source is down: skip it, continue, note the failed source and error class under the facts.
-  Every source down: the author is told, nothing is written. No source enabled: the author is told
+  Every source down: the user is told, nothing is written. No source enabled: the user is told
   before any model call.
 - Fewer than `FACTS_MIN_FACTS` facts that can be stated survive step 3: the step returns
   `InsufficientFacts`, the pipeline stops and says so. Do not write a post from the topic alone.
@@ -796,12 +855,12 @@ post still goes out with it listed, and the author decides.
   instead and the warning says so; the "в тред" button is not shown, and an old one answers
   without a model call.
 - The critic fails: the post goes out with the deterministic findings and `critic = failed`, and
-  the author is told the critic did not check it. A failed regeneration keeps the best version
+  the user is told the critic did not check it. A failed regeneration keeps the best version
   already written. See step 5.
-- An LLM error on a step: the author is told which step failed and why in one phrase (no request
+- An LLM error on a step: the user is told which step failed and why in one phrase (no request
   details); the log has the step and the error class.
-- A run over `PIPELINE_TIMEOUT_SECONDS`: cancelled, the author is told.
-- The provider for a step is unavailable: the log names the step and the provider, the author sees
+- A run over `PIPELINE_TIMEOUT_SECONDS`: cancelled, the user is told.
+- The provider for a step is unavailable: the log names the step and the provider, the user sees
   the step. There is no
   silent fallback to the other provider, because that would change the cost and the voice
-  without the author knowing.
+  without the user knowing.
