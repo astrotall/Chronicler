@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from app.domain.fact import Dispute, Fact, FactSet, FactStatus, SourceRef
+from app.domain.fact import ClaimStance, Dispute, Fact, FactSet, FactStatus, SourceRef
 from pydantic import BaseModel, ConfigDict, Field
 
 FACT_SET_KEY = "fact_set"
@@ -18,6 +18,8 @@ class SnapshotFact(BaseModel):
     status: FactStatus
     domains: list[str]
     weak_domains: list[str] = Field(default_factory=list)
+    stance: ClaimStance = ClaimStance.ASSERTED
+    rebutted_by: list[str] = Field(default_factory=list)
 
 
 class FactSetSnapshot(BaseModel):
@@ -46,6 +48,8 @@ def snapshot_of(fact_set: FactSet) -> FactSetSnapshot:
                 status=fact.status,
                 domains=unique_domains(fact),
                 weak_domains=weak_domains_of(fact),
+                stance=fact.stance,
+                rebutted_by=list(fact.rebutted_by),
             )
             for fact in fact_set.facts
         ],
@@ -61,6 +65,8 @@ def fact_set_of(snapshot: FactSetSnapshot) -> FactSet:
                 id=fact.id,
                 text=fact.text,
                 status=fact.status,
+                stance=fact.stance,
+                rebutted_by=list(fact.rebutted_by),
                 support=[
                     SourceRef(
                         snippet_id=SNAPSHOT_SNIPPET_ID,

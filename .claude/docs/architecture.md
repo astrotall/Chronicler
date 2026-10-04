@@ -255,12 +255,14 @@ The full behaviour is in [pipeline.md](pipeline.md), step 3.
 
 | Module                          | Holds                                                                    |
 | ------------------------------- | ------------------------------------------------------------------------ |
-| `app/services/facts.py`         | The reply schemas (`ExtractedFacts`, `ConflictReport`), the budget, alias mapping, verification, status, dispute pass, limit and the result |
+| `app/services/facts.py`         | The reply schemas (`ExtractedFacts` with `stance` and a nested `rebuttal`, `ConflictReport`), the budget, alias mapping, verification, stance resolution, status, dispute pass, limit and the result |
+| `app/services/stance.py`        | Pure functions: `parse_stance`, `locate_quote` (the quote's own sentences and its context), `stance_evidence` and `has_stance_evidence` (the guard), `strong_evidence` and `has_strong_evidence` (the raise), `reads_as_rebuttal` (swapped roles); reuse `phrase_pattern` from the style filter |
+| `app/config/stance.py`          | Stance data: `STRONG_CLAIM_MARKERS`, `WEAK_CLAIM_MARKERS`, `CLAIM_MARKERS` (both), `REBUTTAL_OPENERS`, `REBUTTAL_MARKERS`, `STANCE_MARKER_EXACT_WORDS`, `STANCE_CONTEXT_SENTENCES` |
 | `app/services/quote_check.py`   | Pure functions: text normalisation, `check_quote`, `extract_numbers`, `numbers_supported` |
 | `app/services/source_domain.py` | Pure functions `source_domain(url, groups)` and `is_weak_source(url, weak_domains)`; reuse `host_matches` from the research orchestrator |
 | `app/services/fact_selection.py`| Pure functions: the three-step priority, the per-domain cap, the floor the cap yields to; `select_facts` returns the kept indices and the counts |
 | `app/prompts/fact_extraction.py`| `render_fact_extraction` and `render_dispute_check`                       |
-| `app/domain/fact.py`            | `SourceRef` (with `weak`), `Fact` (with `weak_only`), `FactStatus`, `Dispute`, `FactSet`, `ExtractionStats`, the two outcomes |
+| `app/domain/fact.py`            | `SourceRef` (with `weak`), `Fact` (with `weak_only`, `stance`, `rebutted_by`, `attributed`), `ClaimStance`, `FactStatus`, `Dispute`, `FactSet`, `ExtractionStats`, the two outcomes |
 
 - Two `complete_json` calls on the same client: extraction (`FACT_EXTRACTION_MAX_TOKENS`) and the
   contradiction check (`DISPUTE_CHECK_MAX_TOKENS`). Contradictions are the same kind of mechanical
@@ -288,10 +290,10 @@ full behaviour is in [pipeline.md](pipeline.md), step 4.
 | `app/services/generator.py`      | The reply schemas (`SingleReply`, `ThreadReply`), `WritingLimits`, numbering, the length check and its one retry, fact id matching, the number check |
 | `app/services/short_post.py`     | Pure functions for a short post: fact selection, the sentence budget, sentence and paragraph boundaries, the sentences to cut, the tail drop and its disputed-number guard |
 | `app/services/style.py`          | `load_examples(directory, limit)`: the few-shot loader                   |
-| `app/prompts/writing.py`         | `render_writing`, `render_length_correction`, `render_expand_correction` and `render_short_correction` |
+| `app/prompts/writing.py`         | `render_writing`, `render_length_correction`, `render_expand_correction` and `render_short_correction`; `disputed_ids`, `attributed_ids`, `cautious_ids` and `assertable_facts`, the one definition of which facts may be stated, used by every step after extraction and by the bot |
 | `app/prompts/style_rules.py`     | `render_style_rules`: the Russian rules block, shared with the critic prompt of step 5 |
 | `app/config/style.py`            | Style rule data: banned phrases, forbidden dashes, invented-experience phrases, cautious wordings, and the data the style filter matches with (see "Style filter") |
-| `app/services/disputes.py`       | `with_disputed_facts`: adds the disputed facts a draft states to `used_fact_ids` |
+| `app/services/disputes.py`       | `with_disputed_facts`: adds the disputed and attributed facts a draft states to `used_fact_ids` |
 | `app/domain/draft.py`            | `PostFormat`, `DraftPart`, `LengthIssue`, `LengthViolation`, `LongSize`, `Revision`, `Draft` |
 
 - One `complete_json` call (`WRITING_*_MAX_TOKENS` per format), and one more only when a length

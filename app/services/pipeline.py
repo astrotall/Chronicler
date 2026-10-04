@@ -38,7 +38,7 @@ from app.llm.errors import (
     LLMUnavailableError,
 )
 from app.prompts.revisions import ANGLES, REVISION_INSTRUCTIONS
-from app.prompts.writing import disputed_ids
+from app.prompts.writing import assertable_facts, attributed_ids, disputed_ids
 from app.services.facts import FactLimits, extract_facts
 from app.services.generator import WritingLimits, write_draft
 from app.services.query_planning import plan_queries
@@ -126,8 +126,7 @@ async def staged[T](
 
 
 def assertable_count(fact_set: FactSet) -> int:
-    disputed = disputed_ids(fact_set)
-    return sum(1 for fact in fact_set.facts if fact.id not in disputed)
+    return len(assertable_facts(fact_set))
 
 
 def sources_all_failed(result: ResearchResult, source_names: Sequence[str]) -> bool:
@@ -219,7 +218,8 @@ class Pipeline:
         if isinstance(extraction, InsufficientFacts):
             return NotEnoughFacts(
                 extraction=extraction,
-                disputed=len(extraction.fact_set.facts) - extraction.assertable_count,
+                disputed=len(disputed_ids(extraction.fact_set)),
+                attributed=len(attributed_ids(extraction.fact_set)),
                 failures=research.failures,
             )
         fact_set = extraction.fact_set

@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from app.domain.fact import FactSet
-from app.prompts.writing import disputed_ids
+from app.prompts.writing import cautious_ids
 from app.services.quote_check import extract_numbers
 from app.services.short_post import dispute_units
 
@@ -14,7 +14,7 @@ def numbers_of(texts: Sequence[str]) -> set[str]:
 
 
 def disputed_with_stated_numbers(offered: FactSet, texts: Sequence[str]) -> set[str]:
-    disputed = disputed_ids(offered)
+    disputed = cautious_ids(offered)
     stated = numbers_of(texts)
     found: set[str] = set()
     for fact in offered.facts:

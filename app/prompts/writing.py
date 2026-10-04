@@ -14,7 +14,7 @@ from app.domain.draft import (
     Revision,
     SentenceBudget,
 )
-from app.domain.fact import Fact, FactSet, FactStatus
+from app.domain.fact import ClaimStance, Fact, FactSet, FactStatus
 from app.domain.llm import Message, Role
 from app.prompts.style_rules import render_style_rules
 
@@ -34,11 +34,19 @@ WRITING_SYSTEM_PROMPT = (
     "5. Disputed facts are listed in their own block. Never state them as established. "
     "Mention one only together with the other version and say that the sources disagree, "
     "or leave it out.\n"
-    "6. {format_rule}\n"
-    "7. The json reply is only an envelope for the post. First list in fact_ids the ids of "
+    "6. Attributed claims are listed in their own block: legends, versions and common "
+    "beliefs that the sources attribute to others (claimed), and claims a source rebuts "
+    "(rebutted). Never state any of them as a fact. A claimed one may be mentioned only "
+    "with its attribution («По преданию, ...», «Принято считать, что ...»), or left out. A "
+    "rebutted one may be mentioned only together with its rebuttal, as a myth and what is "
+    "known instead («Часто пишут, что ...; на деле ...»); if its rebuttal is not among the "
+    "facts, leave it out.\n"
+    "7. {format_rule}\n"
+    "8. The json reply is only an envelope for the post. First list in fact_ids the ids of "
     "the facts the post uses, exactly as given (for example F3), and also the disputed facts "
-    "the post mentions, in whichever wording. Then write the post itself "
-    "as you would write it for publication. Separate paragraphs with a blank line.\n"
+    "the post mentions and the attributed claims it mentions, in whichever wording. Then "
+    "write the post itself as you would write it for publication. Separate paragraphs with "
+    "a blank line.\n"
     "\n"
     "{style_rules}"
 )
@@ -86,6 +94,13 @@ DISPUTES_BLOCK = (
     "Disputed facts. The sources disagree. Never state any of these as established:\n{disputes}"
 )
 DISPUTE_TEMPLATE = "Disagreement: {explanation}\n{facts}"
+ATTRIBUTED_BLOCK = (
+    "Attributed claims. The sources do not state these as true. Never state any of these as "
+    "a fact:\n{facts}"
+)
+ATTRIBUTED_FACT_LINE_TEMPLATE = "{fact_id} [{stance}]: {text}"
+REBUTTED_FACT_LINE_TEMPLATE = "{fact_id} [{stance}; rebuttal: {rebuttals}]: {text}"
+NO_REBUTTAL = "none among the facts"
 UNGROUPED_DISPUTE_EXPLANATION = "the sources disagree on this"
 ANGLE_BLOCK = "Angle requested by the author: {angle}"
 PREVIOUS_BLOCK = "Previous version of the post:\n{previous}"
@@ -165,6 +180,43 @@ def disputed_ids(fact_set: FactSet) -> set[str]:
     return grouped | flagged
 
 
+def attributed_ids(fact_set: FactSet) -> set[str]:
+    disputed = disputed_ids(fact_set)
+    return {fact.id for fact in fact_set.facts if fact.attributed and fact.id not in disputed}
+
+
+def cautious_ids(fact_set: FactSet) -> set[str]:
+    return disputed_ids(fact_set) | attributed_ids(fact_set)
+
+
+def assertable_facts(fact_set: FactSet) -> list[Fact]:
+    cautious = cautious_ids(fact_set)
+    return [fact for fact in fact_set.facts if fact.id not in cautious]
+
+
+def attributed_line(fact: Fact, known: set[str]) -> str:
+    if fact.stance is not ClaimStance.REBUTTED:
+        return ATTRIBUTED_FACT_LINE_TEMPLATE.format(
+            fact_id=fact.id, stance=fact.stance.value, text=fact.text
+        )
+    rebuttals = [fact_id for fact_id in fact.rebutted_by if fact_id in known]
+    return REBUTTED_FACT_LINE_TEMPLATE.format(
+        fact_id=fact.id,
+        stance=fact.stance.value,
+        rebuttals=ID_LIST_SEPARATOR.join(rebuttals) if rebuttals else NO_REBUTTAL,
+        text=fact.text,
+    )
+
+
+def attributed_block(fact_set: FactSet) -> str | None:
+    attributed = attributed_ids(fact_set)
+    known = {fact.id for fact in fact_set.facts}
+    lines = [attributed_line(fact, known) for fact in fact_set.facts if fact.id in attributed]
+    if not lines:
+        return None
+    return ATTRIBUTED_BLOCK.format(facts=LINE_SEPARATOR.join(lines))
+
+
 def fact_lines(facts: Sequence[Fact]) -> str:
     return LINE_SEPARATOR.join(
         FACT_LINE_TEMPLATE.format(fact_id=fact.id, status=fact.status.value, text=fact.text)
@@ -222,10 +274,13 @@ def render_writing(
     revision: Revision | None = None,
 ) -> list[Message]:
     disputed = disputed_ids(fact_set)
-    assertable = [fact for fact in fact_set.facts if fact.id not in disputed]
+    assertable = assertable_facts(fact_set)
     blocks = [TOPIC_BLOCK.format(topic=fact_set.topic)]
     if assertable:
         blocks.append(FACTS_BLOCK.format(facts=fact_lines(assertable)))
+    attributed = attributed_block(fact_set)
+    if attributed is not None:
+        blocks.append(attributed)
     disputes = dispute_blocks(fact_set, disputed)
     if disputes:
         blocks.append(DISPUTES_BLOCK.format(disputes=BLOCK_SEPARATOR.join(disputes)))

@@ -84,6 +84,7 @@ class NotEnoughFacts(BaseModel):
 
     extraction: InsufficientFacts
     disputed: int = Field(ge=0)
+    attributed: int = Field(default=0, ge=0)
     failures: list[SourceFailure]
 
 

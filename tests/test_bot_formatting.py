@@ -455,7 +455,7 @@ def test_too_few_facts_says_what_was_found_and_shows_it() -> None:
     rendered = render_topic_outcome(INSUFFICIENT)
 
     assert rendered.status == messages.NOT_ENOUGH_FACTS_TEMPLATE.format(
-        assertable=2, disputed=3, required=3
+        assertable=2, disputed=3, attributed=0, required=3
     )
     [facts] = rendered.messages
     assert facts.html

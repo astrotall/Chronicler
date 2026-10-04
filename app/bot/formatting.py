@@ -15,7 +15,7 @@ from app.config.constants import (
     WORD_SEPARATOR,
 )
 from app.domain.draft import Draft, LengthIssue, LengthViolation, PostFormat
-from app.domain.fact import Fact, FactSet
+from app.domain.fact import ClaimStance, Fact, FactSet
 from app.domain.pipeline import (
     DraftExpired,
     NoSources,
@@ -159,15 +159,46 @@ def fact_links(fact: Fact) -> list[str]:
     ]
 
 
+def fact_status(fact: Fact, disputed: set[str]) -> str:
+    status = (
+        messages.DISPUTED_STATUS_LABEL
+        if fact.id in disputed
+        else messages.STATUS_LABELS[fact.status]
+    )
+    stance = messages.STANCE_LABELS.get(fact.stance)
+    if stance is None:
+        return status
+    return messages.STANCE_LABEL_TEMPLATE.format(status=status, stance=stance)
+
+
+def rebuttal_lines(fact: Fact, fact_set: FactSet) -> list[str]:
+    lines: list[str] = []
+    if fact.stance is ClaimStance.REBUTTED:
+        lines.append(
+            messages.REBUTTED_BY_TEMPLATE.format(
+                ids=escape(messages.ID_SEPARATOR.join(fact.rebutted_by))
+            )
+            if fact.rebutted_by
+            else messages.REBUTTED_WITHOUT_REBUTTAL_LINE
+        )
+    rebutted = [other.id for other in fact_set.facts if fact.id in other.rebutted_by]
+    if rebutted:
+        lines.append(
+            messages.REBUTS_TEMPLATE.format(ids=escape(messages.ID_SEPARATOR.join(rebutted)))
+        )
+    return lines
+
+
 def fact_block(fact: Fact, fact_set: FactSet, disputed: set[str]) -> str:
-    is_disputed = fact.id in disputed
-    status = messages.DISPUTED_STATUS_LABEL if is_disputed else messages.STATUS_LABELS[fact.status]
     lines = [
-        messages.FACT_HEADER_TEMPLATE.format(fact_id=escape(fact.id), status=status),
+        messages.FACT_HEADER_TEMPLATE.format(
+            fact_id=escape(fact.id), status=fact_status(fact, disputed)
+        ),
         escape(fact.text),
     ]
-    if is_disputed:
+    if fact.id in disputed:
         lines.extend(dispute_reasons(fact, fact_set))
+    lines.extend(rebuttal_lines(fact, fact_set))
     lines.extend(fact_links(fact))
     return LINE_SEPARATOR.join(lines)
 
@@ -275,6 +306,14 @@ def weak_facts_warning(ready: PostReady) -> str | None:
     return messages.WEAK_FACTS_TEMPLATE.format(weak=weak, total=len(used))
 
 
+def attributed_used_warning(ready: PostReady) -> str | None:
+    used_ids = set(ready.result.draft.used_fact_ids)
+    used = [fact.id for fact in ready.fact_set.facts if fact.attributed and fact.id in used_ids]
+    if not used:
+        return None
+    return messages.ATTRIBUTED_USED_TEMPLATE.format(ids=messages.ID_SEPARATOR.join(used))
+
+
 def warnings(ready: PostReady) -> list[str]:
     result = ready.result
     draft = result.draft
@@ -288,6 +327,9 @@ def warnings(ready: PostReady) -> list[str]:
     weak_note = weak_facts_warning(ready)
     if weak_note is not None:
         found.append(weak_note)
+    attributed_note = attributed_used_warning(ready)
+    if attributed_note is not None:
+        found.append(attributed_note)
     if draft.unverified_numbers:
         found.append(
             messages.UNVERIFIED_NUMBERS_TEMPLATE.format(
@@ -377,6 +419,7 @@ def render_topic_outcome(outcome: TopicOutcome) -> Rendered:
             status = messages.NOT_ENOUGH_FACTS_TEMPLATE.format(
                 assertable=extraction.assertable_count,
                 disputed=outcome.disputed,
+                attributed=outcome.attributed,
                 required=extraction.required,
             )
             return Rendered(

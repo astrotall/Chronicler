@@ -116,6 +116,13 @@ regenerated.
 For `disputed` facts the cautious wording is part of the style: attribute the claim and say the
 sources disagree. Do it in a plain sentence, not with a formula from the banned list.
 
+For attributed claims (HIS-32: stance `claimed` or `rebutted`, see [pipeline.md](pipeline.md),
+step 3) the attribution is required, not an addition: a legend is told as a legend («По преданию,
+...», «Принято считать, что ...»), and a rebutted claim only together with its rebuttal («Часто
+пишут, что ...; на деле ...»). Stating such a claim as fact («Пересвет вышел на поединок») is
+rule 14's unsupported claim. Adding «по преданию» to an asserted fact is still rule 14's added
+qualifier.
+
 ## Few-shot examples
 
 The author's voice is set mainly by examples, not by rules.
@@ -146,7 +153,7 @@ filter is step 5 in [pipeline.md](pipeline.md).
 | 6 triplets                                    | Critic, rhetorical triplets only; a list from the facts is fine |
 | 2 opinion cap and opinion as a closing line   | Critic                                                         |
 | 13 filler sentences                           | Critic                                                         |
-| 14 meaning beyond the facts                   | Critic, reading the post against the facts: conclusions, causes, claims of importance, added qualifiers ("по преданию") and precisions ("точно", "уже"), and pronouns that change the meaning |
+| 14 meaning beyond the facts                   | Critic, reading the post against the facts: conclusions, causes, claims of importance, added qualifiers ("по преданию" on an asserted fact) and precisions ("точно", "уже"), pronouns that change the meaning, and an attributed claim stated as fact or a rebutted one without its rebuttal. The attribution an attributed claim carries is not a defect |
 | 15 numbers in digits                          | Deterministic for digits (the number check of step 4, a violation in step 5); a computed interval in words is an unsupported claim for the critic |
 | 1 voice, 7 hook, 8 rhythm, 16 thread structure | Not enforced automatically: prompt and few-shot only          |
 

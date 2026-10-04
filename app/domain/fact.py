@@ -11,6 +11,12 @@ class FactStatus(StrEnum):
     DISPUTED = "disputed"
 
 
+class ClaimStance(StrEnum):
+    ASSERTED = "asserted"
+    CLAIMED = "claimed"
+    REBUTTED = "rebutted"
+
+
 class ExtractionOutcome(StrEnum):
     EXTRACTED = "extracted"
     INSUFFICIENT = "insufficient_facts"
@@ -37,10 +43,16 @@ class Fact(BaseModel):
     text: str
     support: list[SourceRef] = Field(min_length=1)
     status: FactStatus
+    stance: ClaimStance = ClaimStance.ASSERTED
+    rebutted_by: list[str] = Field(default_factory=list)
 
     @property
     def weak_only(self) -> bool:
         return all_weak(self.support)
+
+    @property
+    def attributed(self) -> bool:
+        return self.stance is not ClaimStance.ASSERTED
 
 
 class Dispute(BaseModel):
@@ -84,6 +96,15 @@ class ExtractionStats(BaseModel):
     facts_lost_confirmed_by_weak: int = Field(default=0, ge=0)
     facts_cut_by_domain_cap: int = Field(default=0, ge=0)
     facts_domain_cap_restored: int = Field(default=0, ge=0)
+    facts_claimed: int = Field(default=0, ge=0)
+    facts_rebutted: int = Field(default=0, ge=0)
+    facts_stance_unmarked: int = Field(default=0, ge=0)
+    facts_stance_upgraded_by_code: int = Field(default=0, ge=0)
+    facts_stance_role_swapped: int = Field(default=0, ge=0)
+    facts_unknown_stance: int = Field(default=0, ge=0)
+    rebuttals_proposed: int = Field(default=0, ge=0)
+    rebuttals_verified: int = Field(default=0, ge=0)
+    rebuttals_restored: int = Field(default=0, ge=0)
     facts_kept: int = Field(default=0, ge=0)
 
     @property

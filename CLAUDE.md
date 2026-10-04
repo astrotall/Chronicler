@@ -97,8 +97,10 @@ and angles in `app/prompts/revisions.py`, and in `app/bot` the handlers, the bac
 (`jobs.py`, `flow.py`), the progress message, the input parsing (`requests.py`), the message
 formatting (`formatting.py`), the keyboard and all the Russian texts (`messages.py`). HIS-28
 added the weak domains and the per-domain cap: `SourceRef.weak`, `is_weak_source` in
-`app/services/source_domain.py` and the selection rules in `app/services/fact_selection.py`. `db` does
-not exist yet.
+`app/services/source_domain.py` and the selection rules in `app/services/fact_selection.py`. HIS-32
+added the stance of a claim: `ClaimStance` and `Fact.stance`/`rebutted_by` in `app/domain/fact.py`, the
+marker check in `app/services/stance.py` with its data in `app/config/stance.py`, and the attributed
+claims block of the writer and critic prompts. `db` does not exist yet.
 
 ## Detailed guides
 

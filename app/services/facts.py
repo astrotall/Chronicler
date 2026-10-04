@@ -19,6 +19,7 @@ from app.config.constants import (
 )
 from app.config.settings import Settings
 from app.domain.fact import (
+    ClaimStance,
     Dispute,
     ExtractionStats,
     Fact,
@@ -36,6 +37,12 @@ from app.prompts.fact_extraction import render_dispute_check, render_fact_extrac
 from app.services.fact_selection import Selection, select_facts
 from app.services.quote_check import QuoteCheck, check_quote, numbers_supported, text_segments
 from app.services.source_domain import is_weak_source, source_domain
+from app.services.stance import (
+    has_stance_evidence,
+    has_strong_evidence,
+    parse_stance,
+    reads_as_rebuttal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +64,20 @@ class ExtractedSupport(BaseModel):
     quote: ReplyText
 
 
-class ExtractedFact(BaseModel):
+class ExtractedRebuttal(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     text: ReplyText
     support: list[ExtractedSupport]
+
+
+class ExtractedFact(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    stance: ReplyText | None = None
+    text: ReplyText
+    support: list[ExtractedSupport]
+    rebuttal: ExtractedRebuttal | None = None
 
 
 class ExtractedFacts(BaseModel):
@@ -96,6 +112,7 @@ class CandidateVerdict(StrEnum):
     VERIFIED = "verified"
     UNSUPPORTED = "unsupported"
     NUMBER_MISMATCH = "number_mismatch"
+    UNKNOWN_STANCE = "unknown_stance"
 
 
 QUOTE_VERDICTS: dict[QuoteCheck, SupportVerdict] = {
@@ -138,9 +155,19 @@ class CandidateCheck(BaseModel):
     support: tuple[SourceRef, ...]
     support_verdicts: tuple[SupportVerdict, ...]
     verdict: CandidateVerdict
+    stance: ClaimStance = ClaimStance.ASSERTED
+    stance_unmarked: bool = False
+    stance_upgraded: bool = False
+    stance_role_swapped: bool = False
+
+    @property
+    def attributed(self) -> bool:
+        return self.stance is not ClaimStance.ASSERTED
 
     @property
     def status(self) -> FactStatus:
+        if self.attributed:
+            return FactStatus.SINGLE
         if len(self.independent_domains) >= CONFIRMED_MIN_DOMAINS:
             return FactStatus.CONFIRMED
         return FactStatus.SINGLE
@@ -153,7 +180,8 @@ class CandidateCheck(BaseModel):
     def lost_confirmed_by_weak(self) -> bool:
         all_domains = {ref.domain for ref in self.support}
         return (
-            len(all_domains) >= CONFIRMED_MIN_DOMAINS
+            not self.attributed
+            and len(all_domains) >= CONFIRMED_MIN_DOMAINS
             and len(self.independent_domains) < CONFIRMED_MIN_DOMAINS
         )
 
@@ -234,7 +262,9 @@ def normalize_label(label: str) -> str:
 
 
 def verify_candidate(
-    candidate: ExtractedFact, snippets: Mapping[str, Snippet], limits: FactLimits
+    candidate: ExtractedFact | ExtractedRebuttal,
+    snippets: Mapping[str, Snippet],
+    limits: FactLimits,
 ) -> CandidateCheck:
     support: list[SourceRef] = []
     verdicts: list[SupportVerdict] = []
@@ -268,10 +298,13 @@ def verify_candidate(
                 verdict,
             )
         verdicts.append(verdict)
+    stance = parse_stance(candidate.stance) if isinstance(candidate, ExtractedFact) else None
     if not support:
         outcome = CandidateVerdict.UNSUPPORTED
     elif not numbers_supported(candidate.text, (ref.quote for ref in support)):
         outcome = CandidateVerdict.NUMBER_MISMATCH
+    elif isinstance(candidate, ExtractedFact) and stance is None:
+        outcome = CandidateVerdict.UNKNOWN_STANCE
     else:
         outcome = CandidateVerdict.VERIFIED
     return CandidateCheck(
@@ -279,6 +312,80 @@ def verify_candidate(
         support=tuple(support),
         support_verdicts=tuple(verdicts),
         verdict=outcome,
+        stance=stance or ClaimStance.ASSERTED,
+    )
+
+
+def resolve_stance(
+    claim: CandidateCheck, rebutted: bool, snippet_texts: Mapping[str, str]
+) -> CandidateCheck:
+    stance = ClaimStance.REBUTTED if rebutted else claim.stance
+    if stance is ClaimStance.REBUTTED and reads_as_rebuttal(claim.support, snippet_texts):
+        logger.debug("fact stance rebutted dropped, its quote opens as a rebuttal")
+        claim = claim.model_copy(
+            update={"stance": ClaimStance.ASSERTED, "stance_role_swapped": True}
+        )
+        stance = ClaimStance.ASSERTED
+    if stance is ClaimStance.ASSERTED:
+        if has_strong_evidence(claim.support, snippet_texts):
+            logger.debug("fact stance raised to claimed, a strong marker is near its quotes")
+            return claim.model_copy(update={"stance": ClaimStance.CLAIMED, "stance_upgraded": True})
+        return claim
+    if has_stance_evidence(stance, claim.support, snippet_texts):
+        return claim.model_copy(update={"stance": stance})
+    logger.debug("fact stance lowered to asserted, no attribution marker near its quotes")
+    return claim.model_copy(update={"stance": ClaimStance.ASSERTED, "stance_unmarked": True})
+
+
+class VerifiedFacts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    checks: tuple[CandidateCheck, ...]
+    verified: tuple[CandidateCheck, ...]
+    rebuttals: dict[int, tuple[int, ...]]
+    rebuttals_proposed: int = 0
+
+
+def verify_reply(
+    candidates: Sequence[ExtractedFact], snippets: Mapping[str, Snippet], limits: FactLimits
+) -> VerifiedFacts:
+    snippet_texts = {snippet.id: snippet.text for snippet in snippets.values()}
+    checks: list[CandidateCheck] = []
+    verified: list[CandidateCheck] = []
+    rebuttals: dict[int, tuple[int, ...]] = {}
+    proposed = 0
+    for candidate in candidates:
+        claim = verify_candidate(candidate, snippets, limits)
+        rebuttal = None
+        if candidate.rebuttal is not None:
+            proposed += 1
+            rebuttal = verify_candidate(candidate.rebuttal, snippets, limits)
+        rebutted = rebuttal is not None and rebuttal.verdict is CandidateVerdict.VERIFIED
+        if claim.verdict is CandidateVerdict.VERIFIED:
+            claim = resolve_stance(claim, rebutted, snippet_texts)
+        if rebuttal is not None and rebutted:
+            rebuttal = resolve_stance(rebuttal, False, snippet_texts)
+        checks.append(claim)
+        claim_index = len(verified) if claim.verdict is CandidateVerdict.VERIFIED else None
+        if claim_index is not None:
+            verified.append(claim)
+        if rebuttal is None:
+            continue
+        checks.append(rebuttal)
+        if not rebutted:
+            continue
+        if (
+            claim_index is not None
+            and claim.stance is ClaimStance.REBUTTED
+            and rebuttal.stance is ClaimStance.ASSERTED
+        ):
+            rebuttals[claim_index] = (len(verified),)
+        verified.append(rebuttal)
+    return VerifiedFacts(
+        checks=tuple(checks),
+        verified=tuple(verified),
+        rebuttals=rebuttals,
+        rebuttals_proposed=proposed,
     )
 
 
@@ -304,15 +411,46 @@ def collect_disputes(report: ConflictReport, candidate_count: int) -> DisputeChe
 
 
 async def find_disputes(client: LLMClient, candidates: Sequence[CandidateCheck]) -> DisputeCheck:
-    if len(candidates) < DISPUTE_MIN_FACTS:
+    pool = [
+        index
+        for index, candidate in enumerate(candidates)
+        if candidate.stance is not ClaimStance.REBUTTED
+    ]
+    if len(pool) < DISPUTE_MIN_FACTS:
         return DisputeCheck()
     messages = render_dispute_check(
-        [(candidate_id(index + 1), candidate.text) for index, candidate in enumerate(candidates)]
+        [
+            (candidate_id(position + 1), candidates[index].text, candidates[index].stance)
+            for position, index in enumerate(pool)
+        ]
     )
     report = await client.complete_json(
         messages, ConflictReport, max_tokens=DISPUTE_CHECK_MAX_TOKENS
     )
-    return collect_disputes(report, len(candidates))
+    found = collect_disputes(report, len(pool))
+    return found.model_copy(
+        update={
+            "disputes": tuple(
+                dispute.model_copy(
+                    update={"members": tuple(pool[member] for member in dispute.members)}
+                )
+                for dispute in found.disputes
+            )
+        }
+    )
+
+
+def restored_rebuttals(
+    attributed: Sequence[int],
+    rebuttals: Mapping[int, Sequence[int]],
+    taken: set[int],
+) -> list[int]:
+    restored: list[int] = []
+    for index in attributed:
+        for rebuttal in rebuttals.get(index, ()):
+            if rebuttal not in taken and rebuttal not in restored:
+                restored.append(rebuttal)
+    return restored
 
 
 def build_stats(
@@ -325,6 +463,9 @@ def build_stats(
     facts_disputed: int,
     selection: Selection,
     facts_kept: int,
+    rebuttals_proposed: int = 0,
+    rebuttals_verified: int = 0,
+    rebuttals_restored: int = 0,
 ) -> ExtractionStats:
     support = Counter(verdict for check in checks for verdict in check.support_verdicts)
     outcomes = Counter(check.verdict for check in checks)
@@ -332,7 +473,7 @@ def build_stats(
     return ExtractionStats(
         snippets=snippets,
         snippets_truncated=snippets_truncated,
-        candidates=len(checks),
+        candidates=len(checks) - rebuttals_proposed,
         candidates_over_limit=candidates_over_limit,
         support_proposed=support.total(),
         support_unknown_snippet=support[SupportVerdict.UNKNOWN_SNIPPET],
@@ -357,6 +498,15 @@ def build_stats(
         facts_lost_confirmed_by_weak=sum(check.lost_confirmed_by_weak for check in verified),
         facts_cut_by_domain_cap=selection.cut_by_domain_cap,
         facts_domain_cap_restored=selection.restored_by_floor,
+        facts_claimed=sum(check.stance is ClaimStance.CLAIMED for check in verified),
+        facts_rebutted=sum(check.stance is ClaimStance.REBUTTED for check in verified),
+        facts_stance_unmarked=sum(check.stance_unmarked for check in verified),
+        facts_stance_upgraded_by_code=sum(check.stance_upgraded for check in verified),
+        facts_stance_role_swapped=sum(check.stance_role_swapped for check in verified),
+        facts_unknown_stance=outcomes[CandidateVerdict.UNKNOWN_STANCE],
+        rebuttals_proposed=rebuttals_proposed,
+        rebuttals_verified=rebuttals_verified,
+        rebuttals_restored=rebuttals_restored,
         facts_kept=facts_kept,
     )
 
@@ -375,7 +525,7 @@ async def extract_facts(
         raise ValueError("topic must not be blank")
     topic = topic.strip()
     shown, truncated = fit_to_budget(snippets, limits.input_max_chars)
-    checks: list[CandidateCheck] = []
+    result = VerifiedFacts(checks=(), verified=(), rebuttals={})
     over_limit = 0
     if shown:
         by_alias = {snippet_alias(index + 1): snippet for index, snippet in enumerate(shown)}
@@ -385,23 +535,23 @@ async def extract_facts(
             max_tokens=FACT_EXTRACTION_MAX_TOKENS,
         )
         over_limit = max(len(reply.facts) - FACT_CANDIDATES_MAX, 0)
-        checks = [
-            verify_candidate(candidate, by_alias, limits)
-            for candidate in reply.facts[:FACT_CANDIDATES_MAX]
-        ]
-    verified = [check for check in checks if check.verdict is CandidateVerdict.VERIFIED]
+        result = verify_reply(reply.facts[:FACT_CANDIDATES_MAX], by_alias, limits)
+    verified = list(result.verified)
     dispute_check = await find_disputes(client, verified)
 
     disputed = {index for dispute in dispute_check.disputes for index in dispute.members}
+    open_indices = [index for index in range(len(verified)) if index not in disputed]
+    attributed = [index for index in open_indices if verified[index].attributed]
     selection = select_facts(
         verified,
-        [index for index in range(len(verified)) if index not in disputed],
+        [index for index in open_indices if not verified[index].attributed],
         max_facts=limits.max_facts,
         floor=max(limits.min_facts, limits.domain_cap_floor),
         max_per_domain=limits.max_per_domain,
     )
     kept = list(selection.kept)
-    ordered = kept + sorted(disputed)
+    restored = restored_rebuttals(attributed, result.rebuttals, set(kept) | disputed)
+    ordered = kept + restored + attributed + sorted(disputed)
     final_ids = {index: fact_id(position + 1) for position, index in enumerate(ordered)}
     facts = [
         Fact(
@@ -409,6 +559,12 @@ async def extract_facts(
             text=verified[index].text,
             support=list(verified[index].support),
             status=FactStatus.DISPUTED if index in disputed else verified[index].status,
+            stance=verified[index].stance,
+            rebutted_by=[
+                final_ids[rebuttal]
+                for rebuttal in result.rebuttals.get(index, ())
+                if rebuttal in final_ids
+            ],
         )
         for index in ordered
     ]
@@ -427,17 +583,21 @@ async def extract_facts(
         snippets=len(shown),
         snippets_truncated=truncated,
         candidates_over_limit=over_limit,
-        checks=checks,
+        checks=result.checks,
         dispute_check=dispute_check,
         facts_disputed=len(disputed),
         selection=selection,
         facts_kept=len(facts),
+        rebuttals_proposed=result.rebuttals_proposed,
+        rebuttals_verified=sum(len(links) for links in result.rebuttals.values()),
+        rebuttals_restored=len(restored),
     )
     log_stats(stats)
-    if len(kept) < limits.min_facts:
+    assertable_count = len(kept) + len(restored)
+    if assertable_count < limits.min_facts:
         return InsufficientFacts(
             fact_set=fact_set,
-            assertable_count=len(kept),
+            assertable_count=assertable_count,
             required=limits.min_facts,
             stats=stats,
         )

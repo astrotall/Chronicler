@@ -49,6 +49,10 @@ Input: the topic and the snippets. Output: `FactsExtracted` (a `FactSet`) or `In
   numbers of its verified quotes (see "Number check"). Otherwise the fact is dropped: the
   translation into Russian is the one place the model could change a figure, and step 4 checks
   the post's numbers against the text of the facts.
+- **The stance of each fact** (HIS-32): `asserted`, `claimed` or `rebutted`, how the snippet itself
+  presents the claim. The model gives it, code checks that the attribution is visible next to a
+  quote (see "Stance" below). A `claimed` or `rebutted` fact is an attributed claim: never
+  `confirmed`, never stated as fact.
 - Code assigns `confirmed` or `single` from the independent, not weak, domains behind the verified
   support (see "Status" below), and marks every support item `weak` or not.
 - A second LLM pass on the same step looks for contradictions. It sees only the ids and texts of
@@ -124,6 +128,93 @@ Two or more different domains among the verified support that are **not weak** m
 (`bbc.co.uk` and `x.co.uk` are both `co.uk`). That errs towards `single`, never towards a false
 `confirmed`.
 
+An attributed fact (stance `claimed` or `rebutted`) is always `single`, whatever its domains: two
+sites repeating one myth do not confirm it.
+
+#### Stance
+
+Found in a manual long run on the Soviet daily life topic: «В СССР в 1930 и 1931 годах существовало
+30 февраля» reached the post as a fact. The Wikipedia page says that many sources claim it and then
+that the calendars of the two years coincide. The quote was verbatim, so the quote check passed; the
+meaning was inverted. The contradiction pass did not help, because the rebuttal was not a fact.
+
+- **Values.** `asserted`: the snippet states the claim as true, the default and by far the most
+  common stance, also when the snippet cites a document or a count it relies on («по данным
+  переписи», «согласно указу»). `claimed`: the snippet distances itself, as a legend, a tradition, a
+  chronicle's story, a common belief, a myth, what many or some sources say, a version of some
+  historians, «якобы». `rebutted`: the snippet gives the claim and then rebuts it.
+- **Reply.** Each fact has `stance` (first, so the model decides before it writes), `text`,
+  `support` and an optional `rebuttal`: `{text, support}`, the rebutting statement written as a
+  plain fact. `stance` is written only for `claimed` and `rebutted`; an asserted fact leaves it out,
+  which saves output tokens on the common case. The text of an attributed fact keeps the attribution («По преданию, ...»). When one
+  snippet attributes a claim and another states it plainly, the prompt asks for one fact with the
+  more cautious stance.
+- **Parsing.** `stance` is a string in the schema and code reads it (trimmed, case ignored), so one
+  odd value does not fail the whole reply. A missing stance is `asserted`, as before HIS-32. An
+  unknown value (`legend`, `disputed`) drops the fact, counted in `facts_unknown_stance`: reading it
+  as `asserted` is the bug this rule exists for, and reading it as `claimed` would trust an
+  attribution nobody checked.
+- **The rebuttal is a fact of its own.** It goes through the quote and number checks like any
+  candidate and becomes an `asserted` fact. If it is verified, the claim is `rebutted` (also when the
+  model wrote `claimed`) and `Fact.rebutted_by` of the claim lists the rebuttal's id. A rebuttal that
+  fails its checks is dropped; the claim stays `rebutted` with an empty `rebutted_by`, and the writer
+  is told to leave it out. A verified rebuttal whose claim failed is kept as a plain fact.
+- **Code checks the attribution is visible** (`app/services/stance.py`). For each support item the
+  context is the sentence of the snippet that holds the quote and `STANCE_CONTEXT_SENTENCES` (1)
+  sentence on each side, inside one Tavily chunk (split at `[...]`) and one line. Sentences are
+  `split_sentences` of step 4; the quote is located by `check_quote` on the shortest run of sentences
+  that holds it, and if it is not found the context is the quote alone. A `claimed` fact needs one
+  of `CLAIM_MARKERS` in the context of at least one support item; a `rebutted` fact one of
+  `CLAIM_MARKERS` or `REBUTTAL_MARKERS` («однако», «на самом деле», «in fact»). Markers are matched by
+  stem like the banned phrases (`phrase_pattern` of step 5), in Russian and English, data in
+  `app/config/stance.py`. «однако» alone is too common to support `claimed`. The forms of «легенда»
+  and «миф» (and `legend`, `myth`) match whole (`STANCE_MARKER_EXACT_WORDS`), so «легендарный»,
+  «мифический» and «legendary» are not markers.
+- **Strong and weak markers.** `CLAIM_MARKERS` is `STRONG_CLAIM_MARKERS` (legend, tradition, myth:
+  «предание», «по преданию», «легенда», «сказание», «миф», «якобы», «будто бы», «по слухам», «legend
+  has it», «allegedly», «supposedly», «it is said») and `WEAK_CLAIM_MARKERS` (a reported view or a
+  source named: «считается», «утверждается», «по мнению», «по одной из версий», «многие
+  источники», «указывается», «летопись», «хроника», «according to», «reportedly»). Weak markers
+  only confirm a stance the model gave.
+- **Code raises an asserted fact to `claimed`** (`facts_stance_upgraded_by_code`) when the context of
+  at least one of its support items holds a strong marker. This covers a merge: one page attributes
+  the duel of Peresvet and Chelubey to «Сказание о Мамаевом побоище», another states it plainly, and
+  the model writes one asserted fact with both quotes. The cautious stance wins, the fact is `single`,
+  and two sites never confirm a legend. A support item whose own sentence opens with a rebuttal
+  opener (`REBUTTAL_OPENERS`: «однако», «на самом деле», «в действительности», «however», «in fact»,
+  «actually») and holds no strong marker is not counted: it is the rebuttal of the legend next to
+  it. The verified rebuttal of a rebutted fact goes through the same rule.
+- **Code does not rewrite the text** of a raised fact. It may read as a plain statement («Сражение
+  началось с поединка ...»); the attribution in the post comes from the attributed claims block of
+  the writer and from the critic.
+- **Swapped roles** (`facts_stance_role_swapped`). A `rebutted` fact whose quotes all sit in sentences
+  that open with a rebuttal opener and hold no strong marker is the rebuttal itself, not the claim
+  rebutted. It becomes `asserted` and is not linked to its "rebuttal"; that one, usually the real
+  claim, then goes through the raise rule above. A sentence such as «Однако, по преданию, ...» keeps
+  `rebutted`.
+- **Without a marker the fact is lowered to `asserted`**, counted in `facts_stance_unmarked`. The
+  check guards the other way round: the model must not mark a fact as a myth from its own knowledge
+  or because it sounds doubtful. «По данным переписи 1939 года ...» marked `claimed` is lowered,
+  because a census is not in the marker list. The cost: a real attribution worded outside the list
+  is lowered too, so the list is broad and the live runs list every lowering.
+
+Known limits:
+
+- Only strong markers raise a fact. A plain fact next to a legend sentence is raised as well
+  («Войска выстроились на поле. Предание рассказывает о поединке ...»), and a sentence that names
+  the «Сказание» as a text (when it was written) raises the facts around it. Both err towards an
+  attribution, never towards a myth stated as fact.
+- A weak marker in a neighbouring sentence may belong to another claim («считается» about something
+  else); the check then passes a wrong `claimed`. The same direction of error.
+- An estimate with its attribution in the text («по оценкам историков, около 80 тысяч») is
+  `asserted`: «по оценкам» is in neither list on purpose, so the guard does not pass every figure of
+  historians as a version, and code does not raise it.
+- A myth that another page states plainly as its own claim («Таким образом, ... существовало 30
+  февраля») is `asserted` for that page. The model may mark it `claimed`, but with no marker in the
+  page the guard lowers it; only the contradiction pass can catch it (HIS-32 round 2: it did not).
+- Swapped roles are detected only by the opener of the sentence. A rebuttal that does not open with
+  one («Судя по «Задонщине», Пересвет был жив») is not seen.
+
 #### Weak sources
 
 A weak source is a page whose host equals a domain of `FACTS_WEAK_DOMAINS` or is its subdomain
@@ -145,7 +236,18 @@ its link marked "слабый", but it is not an independent source:
 #### Contradictions
 
 - The pass gets the verified facts as `C1: text` lines, before the limit, so a disputed fact
-  outside the limit is not lost. It is skipped when there are fewer than 2 facts.
+  outside the limit is not lost. It is skipped when there are fewer than 2 facts. A `claimed` fact
+  is marked `C3 [claimed]: text`.
+- **A claim and its denial are a contradiction** (HIS-32 round 3): one fact says an event, a date, a
+  number or a thing was, another says it was not or is refuted. An attribution in the text («по
+  утверждению источника», «по преданию», «по версии») does not remove the contradiction, and the
+  `[claimed]` lines are compared with the plain facts and with the denials as well. The prompt gives
+  two neutral examples (a bridge built in 1900 and not built; a tower by the gate in a legend and
+  not found by the excavation). A version that only adds to a plain fact without denying it, a
+  sequence of events, and a rounded number next to the exact one stay not contradictions. This is
+  the only defence against a myth that a page states as its own conclusion with no marker: the
+  stance guard lowers such a fact to `asserted`, and no code links facts by their numbers. A `rebutted` fact is left out: its relation to its rebuttal is already known, and
+  the pair would come back as a contradiction that makes the true rebuttal "СПОРНО".
 - Each reported group has ids, an explanation in Russian for the author, and a verdict
   `contradiction`. The verdict comes after the explanation, so the model reasons first; a group
   with `contradiction: false` is withdrawn. Without it the model reported sequences of events
@@ -174,16 +276,28 @@ its link marked "слабый", but it is not an independent source:
   short post and never alone causes `InsufficientFacts`. The floor does not invent facts: a set
   that is short without the cap stays short.
 - Disputed facts are always kept, on top of the limit, so the author sees them.
-- The output is the kept facts, then the disputed ones; ids `F1`, `F2`... follow this order.
+- Attributed facts (not disputed) never enter the sort, the cap or the limit: they are kept on top
+  of the limit, like disputed facts. A rebuttal cut by the limit or the cap comes back with its
+  claim (`rebuttals_restored`), so a rebutted claim is never shown without its rebuttal.
+- The output is the kept facts, then the rebuttals that came back, then the attributed facts, then
+  the disputed ones; ids `F1`, `F2`... follow this order.
 - Disputed facts ignore the cap and do not take its places.
-- If fewer than `FACTS_MIN_FACTS` (3) facts are kept that are not disputed, the result is
-  `InsufficientFacts` with whatever survived. Disputed facts never count towards the minimum,
-  because they cannot be stated. Code never fills the gap.
+- If fewer than `FACTS_MIN_FACTS` (3) assertable facts are kept (not disputed, not attributed; a
+  rebuttal that came back counts), the result is `InsufficientFacts` with whatever survived.
+  Disputed and attributed facts never count towards the minimum, because they cannot be stated.
+  Code never fills the gap.
 - The `ExtractionStats` of the weak and cap rules, counted over the verified facts before the cut:
   `support_weak`, `facts_weak_only`, `facts_lost_confirmed_by_weak` (would be `confirmed` by all
   domains, is `single` without the weak ones), `facts_cut_by_domain_cap` (left out by the cap, net
   of the facts that came back), `facts_domain_cap_restored`. Counters only, never domains or texts.
-- At most 40 candidates from the model are used, the first ones. The model is asked for at most
+- The stance counters: `facts_claimed`, `facts_rebutted` (over the verified facts),
+  `facts_stance_unmarked`, `facts_stance_upgraded_by_code`, `facts_stance_role_swapped`,
+  `facts_unknown_stance`, `rebuttals_proposed`, `rebuttals_verified`
+  (linked to their claim), `rebuttals_restored`. `candidates` counts the top-level facts of the
+  reply; rebuttals are counted apart.
+- At most 40 candidates from the model are used, the first ones. The prompt states the bound at its
+  start and again in its last rule, with the number from `FACT_CANDIDATES_MAX`. The reply may use up
+  to `FACT_EXTRACTION_MAX_TOKENS` (12000) output tokens. The model is asked for at most
   40 but sometimes returns more; the extra ones are dropped and counted, not rejected, because a
   retry of the whole reply costs a full extraction.
 - No snippets means `InsufficientFacts` without a call to the model.
@@ -203,11 +317,19 @@ job. An empty `FactSet` is a `ValueError` before any call.
   A number taken from the topic is not among the facts and is reported like any other.
 - **What the model sees of a fact:** its id (`F1`...), its text and its status. Never the quotes
   or the URLs: the post is written in the model's own words, not copied from a source.
+- **Attributed claims are a separate block** (HIS-32), between the facts to state and the disputed
+  ones: `F4 [claimed]: text` and `F5 [rebutted; rebuttal: F3]: text` (`none among the facts` if the
+  rebuttal is not in the set). The rule: never state one as fact; a claimed one only with its
+  attribution or not at all; a rebutted one only together with its rebuttal, as a myth and what is
+  known instead. "Which facts may be stated" has one definition, `assertable_facts` in
+  `app/prompts/writing.py` (not disputed, not attributed): the short selection, the long minimum,
+  the unused list of the expand correction, the thread threshold and the bot all use it.
 - **A short post gets a selection of the facts.** Before the call, code picks at most
   `SHORT_MAX_FACTS` (3) facts for `short` (`select_short_facts`, `app/services/short_post.py`);
   `long` and `thread` get the whole `FactSet`. The rules:
-  1. Facts that are not disputed, `confirmed` first, then `single`, in `FactSet` order inside each
-     status. Step 3 already keeps the extraction model's order, which tends to open with the core
+  1. Assertable facts (not disputed, not attributed), `confirmed` first, then `single`, in
+     `FactSet` order inside each status. A short post never gets an attributed claim: three
+     sentences have no room for the attribution and the rebuttal. Step 3 already keeps the extraction model's order, which tends to open with the core
      facts. The length of a fact's text is not used: short facts are mostly side details.
   2. A dispute enters only whole and only if it fits into the slots left. Overlapping disputes
      merge into one unit; disputed facts with no group form one unit. With the default limit and 3
@@ -235,9 +357,10 @@ job. An empty `FactSet` is a `ValueError` before any call.
 - **Used facts (`used_fact_ids`).** The ids the model reported, in its order, then the disputed
   facts that code finds, in `FactSet` order (`app/services/disputes.py`). The bot marks disputed
   facts by this list, so a dispute stated in the text must not depend on the model reporting it.
-  1. Candidates are the disputed facts of the set that went into the prompt: the selection for
-     `short`, the whole `FactSet` for `long` and `thread`. A disputed fact is one with status
-     `disputed` or in a `Dispute`.
+  1. Candidates are the disputed and attributed facts of the set that went into the prompt: the
+     selection for `short`, the whole `FactSet` for `long` and `thread`. A disputed fact is one with
+     status `disputed` or in a `Dispute`; an attributed one has stance `claimed` or `rebutted`. So
+     the bot marks a version the text states even when the model did not report it.
   2. A candidate is found if it has numbers (`extract_numbers`) and all of them are among the
      numbers of the `text` of all parts together. Numbering prefixes are not part of `text`. A
      candidate with no numbers is never found, only reported by the model.
@@ -384,16 +507,18 @@ No dependency. Each phrase becomes a regular expression:
 - **What it sees:** the parts (numbered `[1]`... for a thread), the rules block
   (`render_style_rules`, the same text the writer gets), the facts that may be stated as `F1
   [status]: text`, and the disputed facts grouped by dispute with its explanation, as the writer
-  sees them. The whole `FactSet`, not the short selection: a claim is supported if any fact states
-  it. Never quotes or URLs.
+  sees them, and the attributed claims block of the writer, with each stance. The whole `FactSet`,
+  not the short selection: a claim is supported if any fact states it. Never quotes or URLs.
 - **What it looks for:** `unsupported_claim` (a conclusion, cause, consequence or claim of
   importance no fact states; an added qualifier such as "по преданию"; an added precision or
-  emphasis such as "точно", "уже"; a computed interval; a disputed fact stated as established),
+  emphasis such as "точно", "уже"; a computed interval; a disputed fact stated as established; an
+  attributed claim stated as fact, or a rebutted one without its rebuttal),
   `ambiguous_reference` (a pronoun or omitted subject that makes the sentence claim something the
   facts do not), `filler`, `opinion` (over `OPINION_MAX_PER_POST` or as a closing line), `cliche`,
   `triplet` (rhetorical only; a list from the facts is not one) and `invented_experience`.
 - **Not its job:** honest retelling of a fact in other words (an explicit exception in the prompt),
-  cautious wording of a dispute, punctuation, emoji, hashtags, the closing question, length, digits,
+  cautious wording of a dispute, the attribution an attributed claim carries («По преданию»),
+  punctuation, emoji, hashtags, the closing question, length, digits,
   and the hook, rhythm and thread structure (rules 7, 8, 16 are not enforced automatically).
 - **Reply:** `findings`, each `excerpt`, `rule`, `explanation` (Russian, for the author, at most
   `STYLE_CRITIC_EXPLANATION_MAX_CHARS`), then `violation`. The verdict comes last so the model
@@ -514,11 +639,15 @@ In this order:
    regeneration failed and the best version is shown, regressions rejected (a count and the
    reason, never the rejected text), a draft under the long minimum (characters or facts against
    the minimum, from the `length` lines), and a non-empty `dropped_tail` with the
-   dropped text and a note that `used_fact_ids` may be inexact.
+   dropped text and a note that `used_fact_ids` may be inexact, and the ids of the versions and
+   rebutted claims the post uses, with a reminder to check they are told with the attribution.
 3. **Facts**, HTML with every text escaped. Each fact: id, status ("подтверждён: разные домены",
    "один источник" or "СПОРНО"), text, and a link per source url labelled with its host. A
    disputed fact has "Почему спорно (вместе с F6): explanation" from its `Dispute`, or "источники
-   расходятся" if it is in no group. After the first post the facts are split into "В посте" (by
+   расходятся" if it is in no group. An attributed fact adds its stance to the status: "один
+   источник · версия" or "· опровергнуто"; a rebutted one has "Опровергается: F3" (or a line that
+   its rebuttal failed the check), and the rebuttal has "Опровергает: F5". "Фактов мало" counts the
+   versions and rebutted claims apart from the disputed facts. After the first post the facts are split into "В посте" (by
    `used_fact_ids`, which since HIS-23 includes the disputed facts the text states) and "Не вошли
    в пост", every fact of the `FactSet` is shown, and partial source failures are noted at the
    bottom as source and error class only. After a button only the facts of the new variant are
@@ -592,7 +721,8 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | ------------------- | -------------------------------------------------------------------------------------------------------- |
 | `Snippet`           | A piece of source text as returned by a research source: id, origin, title, URL, text, language          |
 | `SourceRef`         | Evidence for a fact: `snippet_id`, `url`, `domain` (after the domain rules), the verified verbatim `quote` |
-| `Fact`              | `id` (`F1`...), `text` in Russian, `support` (one or more verified `SourceRef`), `status`                 |
+| `Fact`              | `id` (`F1`...), `text` in Russian, `support` (one or more verified `SourceRef`), `status`, `stance` (default `asserted`, so older snapshots load), `rebutted_by` (ids of the rebutting facts) |
+| `ClaimStance`       | `asserted`, `claimed`, `rebutted`: how the source presents the claim                                      |
 | `FactStatus`        | `confirmed`, `single`, `disputed`                                                                         |
 | `Dispute`           | `fact_ids` (2 or more) and an `explanation` in Russian for the author                                     |
 | `FactSet`           | `topic`, `facts`, `disputes`                                                                              |
@@ -639,6 +769,9 @@ the domain rules in step 3: language editions of Wikipedia and its mirrors are o
 | Fact status (domain count)                              | Code       | Counting domains after host rules and groups             |
 | Which facts say the same thing                          | Model      | Needs language understanding                             |
 | Which facts contradict each other                       | Model      | Needs language understanding; code turns the mark into `disputed` |
+| How a source presents a claim (asserted, claimed, rebutted) | Model  | Needs language understanding                              |
+| The attribution or rebuttal is visible next to the quote | Code      | Stem match of the markers in the quote's sentence and its neighbours |
+| An attributed claim is not stated as fact in the post   | Model      | The critic reads the post against the attributed claims block |
 | Numbers and dates in the post occur among the facts     | Code       | Extraction and set comparison                            |
 | Every claim in the post is supported by a fact          | Model      | The critic reads the post against the facts              |
 | The critic's excerpt occurs in the post                 | Code       | Substring match after the quote normalisation            |

@@ -458,7 +458,7 @@ async def test_too_few_facts_edits_the_progress_and_lists_the_facts(
 
     edits = telegram.of(EditMessageText)
     assert edits[-1].text == messages.NOT_ENOUGH_FACTS_TEMPLATE.format(
-        assertable=1, disputed=2, required=3
+        assertable=1, disputed=2, attributed=0, required=3
     )
     facts = telegram.of(SendMessage)[-1]
     assert facts.parse_mode == ParseMode.HTML
