@@ -613,7 +613,14 @@ def test_limits_from_settings() -> None:
         weak_domains=FACTS_DEFAULT_WEAK_DOMAINS,
         max_per_domain=6,
         domain_cap_floor=5,
+        relevance=True,
     )
+
+
+def test_relevance_is_turned_off_by_its_setting() -> None:
+    settings = make_settings().model_copy(update={"facts_relevance_enabled": False})
+
+    assert FactLimits.from_settings(settings).relevance is False
 
 
 def test_the_cap_floor_is_the_larger_of_the_fact_and_thread_minimums() -> None:

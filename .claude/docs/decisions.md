@@ -8,8 +8,8 @@ closed. A decision on an open question is recorded here in the same change that 
 
 | Decision                                  | Reason                                                                                      |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Personal bot, one user, ID whitelist      | The bot serves one author. Multi-user means accounts, quotas and isolation, none of it needed |
-| No publishing to X                        | The author reviews and posts by hand. It removes a whole class of risk and an API dependency |
+| One user, ID whitelist                    | The bot serves one user. Multi-user means accounts, quotas and isolation, none of it needed |
+| No publishing to X                        | The user reviews and posts by hand. It removes a whole class of risk and an API dependency |
 | Post only from facts with sources         | The main failure of an LLM here is an invented date, number or quote                         |
 | Verbatim quote per fact, checked by code  | A model cannot certify its own quote. A substring check can                                  |
 | Numbers and dates in the post checked by code | Catches the writing step inventing a figure the facts do not contain                      |
@@ -17,7 +17,7 @@ closed. A decision on an open question is recorded here in the same change that 
 | Provider chosen per step, start with DeepSeek | Planning and extraction are mechanical, writing and critique are where voice matters      |
 | No database first, SQLite later           | Early iterations do not need persistence. SQLite is a file and needs no service              |
 | PostgreSQL, Redis, Arq, Alembic, Docker deferred | One user and one process do not need them. Each needs its own ticket with a stated reason |
-| Fact status `confirmed` / `single` / `disputed` | The author sees how well a claim stands, and disputed claims are written cautiously    |
+| Fact status `confirmed` / `single` / `disputed` | The user sees how well a claim stands, and disputed claims are written cautiously    |
 | Few-shot is the main style lever          | A banned-phrase list only moves the cliche. Examples set the voice                           |
 | The mechanism works with zero examples    | There are no reference posts at the start                                                   |
 | Tavily as the starting web search         | One API, built for LLM use, returns text snippets. Not a lock-in, see below                 |
@@ -37,19 +37,25 @@ closed. A decision on an open question is recorded here in the same change that 
 | The model groups one claim across snippets, code counts domains | Recognising "the same claim" needs language understanding; counting domains does not |
 | A weak domain is not a blocked domain | `RESEARCH_BLOCKED_DOMAINS` removes a page before extraction. `FACTS_WEAK_DOMAINS` keeps it as a visible source that does not count as independent. Video, blogs, school slides and AI slide makers copy each other, so a pair of them is not a confirmation |
 | Weakness is matched on the host, not on the registrable domain | The domain is the last two labels, so `otvet.mail.ru` would become `mail.ru`. The host keeps the distinction |
-| `confirmed` needs two non-weak domains; weak facts go lower, not out | Dropping them would hide what the sources said. Ordering and the "слабый" mark let the author see and judge |
+| `confirmed` needs two non-weak domains; weak facts go lower, not out | Dropping them would hide what the sources said. Ordering and the "слабый" mark let the user see and judge |
 | A per-domain cap of 6 of 20, yielding to the larger of the fact and thread minimums | One archive page gave 12 of 20 facts. The floor keeps the cap from turning a thread into a short post |
 | A fact is charged to its least loaded non-weak domain | "First non-weak domain" would push out a confirmed fact because Wikipedia, usually the first support, is full |
 | Domain outside groups is the last two host labels | No public suffix list without a new dependency. Merging `x.co.uk` and `y.co.uk` errs towards `single`; the full host would err towards a false `confirmed` |
 | The stance of a claim is a field of the fact (`asserted`, `claimed`, `rebutted`), with the attribution also in its text | HIS-32. Code and every later step read the field; the text alone cannot be checked. See "Stance of a claim" below |
 | An unknown stance drops the fact; a missing one is `asserted` | Reading an unknown value as `asserted` is the bug itself, as `claimed` it trusts an unchecked attribution. Missing is the pre-HIS-32 behaviour and avoids a retry of the whole extraction |
-| A `claimed` or `rebutted` fact without a marker next to its quote is lowered to `asserted` | The author's decision. The check stops the model from calling a fact a myth from its own knowledge; the list of markers is broad, and live runs list every lowering |
-| A rebuttal is linked by `rebutted_by`, not merged into a `Dispute` | A `Dispute` would make the true rebuttal "СПОРНО" and tell the writer "sources disagree" when the same source says the claim is a myth. The author's decision |
-| Strong markers raise an asserted fact to `claimed` by code; weak markers only confirm the model's stance | HIS-32 round 2, the author's decision: the duel of Peresvet stayed asserted when the model merged an attributed quote with a plain one. See "Stance of a claim" below |
-| A `rebutted` fact whose quote sentences open with a rebuttal opener is the rebuttal and becomes `asserted` | The model swapped the claim and its rebuttal live («Задонщина»). The author's decision |
+| A `claimed` or `rebutted` fact without a marker next to its quote is lowered to `asserted` | The owner's decision. The check stops the model from calling a fact a myth from its own knowledge; the list of markers is broad, and live runs list every lowering |
+| A rebuttal is linked by `rebutted_by`, not merged into a `Dispute` | A `Dispute` would make the true rebuttal "СПОРНО" and tell the writer "sources disagree" when the same source says the claim is a myth. The owner's decision |
+| Strong markers raise an asserted fact to `claimed` by code; weak markers only confirm the model's stance | HIS-32 round 2, the owner's decision: the duel of Peresvet stayed asserted when the model merged an attributed quote with a plain one. See "Stance of a claim" below |
+| A `rebutted` fact whose quote sentences open with a rebuttal opener is the rebuttal and becomes `asserted` | The model swapped the claim and its rebuttal live («Задонщина»). The owner's decision |
 | `stance` is written only for claimed and rebutted facts | Output tokens. A missing stance already reads as `asserted` |
 | `FACT_EXTRACTION_MAX_TOKENS` 12000 | The worst live reply was 7987 of 8000; 12000 leaves 50% over it. DeepSeek allows up to 384K output for `deepseek-flash` |
-| Attributed claims are kept beyond the limit, never `confirmed`, never assertable | Like disputed facts: the author sees them, they never count towards a minimum, and a short post never gets one |
+| Attributed claims are kept beyond the limit, never `confirmed`, never assertable | Like disputed facts: the user sees them, they never count towards a minimum, and a short post never gets one |
+| Facts that may be stated are ranked against the topic in a third pass of `fact_extraction` (HIS-27) | The model's order follows the snippets, not the topic, and the limit and the short selection took the first facts. See "Topic relevance" below |
+| Trust first, relevance inside a trust step, aspects take turns among relevance 2 and 3 | The trust steps of HIS-28 stay the first key. Turns keep one aspect (ten ration norms, eight Stakhanov facts) from filling the limit; relevance 1 follows in the model's order. The owner's decision |
+| A fact off the topic (about a source, outside the period, relevance 0) is set aside over every trust step and comes back only for the floor | A well sourced fact about an exhibition is still not about the subject. The floor keeps the ranking from causing `InsufficientFacts` or a short post instead of a thread. The owner's decision |
+| `about_source` is narrow: the name, the definition, the history of the subject, its memory and who reports it are about the subject | The owner's decision. The live run lost «Епифаний ... сообщает» and «По оценкам историков» to the flag before the prompt got neutral examples of both kinds |
+| `outside_period` stands only if code finds every year of the fact outside the topic's years ± 10 | The model set it on «отменят уже в 1935 году» for the 1930s and on a topic with no period. Decided by the implementer after the first live run |
+| A failed ranking keeps the model's order | The ranking improves the order; losing an extraction to it would cost a full extraction. `relevance_failed` is counted |
 | Snippets are shown to the model as `S1`, `S2`... | A 16-character hash is easy to garble. An unknown label drops the support item, nothing is guessed |
 | Fact text in Russian, quote in the snippet's language | The post is Russian; a translated quote could not be checked. The translation itself is guarded by the number check |
 | Numbers of a fact must occur in its quotes | Step 4 checks the post's numbers against the fact text, so the fact text must be bound to the source too |
@@ -57,7 +63,7 @@ closed. A decision on an open question is recorded here in the same change that 
 | One extraction call within a character budget, no batches | Grouping one claim across snippets needs all snippets in one call. The budget cuts long snippets to a common cap, see pipeline.md |
 | Contradictions are a second pass on the `fact_extraction` step | Same kind of reading, same provider. It sees only fact texts, before the limit |
 | A contradiction needs an explicit verdict from the model | Without it DeepSeek reported sequences of events as contradictions, even while writing "this is not a contradiction" |
-| "Not enough facts" is a typed result, not an exception | `FactsExtracted \| InsufficientFacts` makes the writing step handle both, and the author still sees what was found |
+| "Not enough facts" is a typed result, not an exception | `FactsExtracted \| InsufficientFacts` makes the writing step handle both, and the user still sees what was found |
 | Extra candidates are dropped, not rejected | The model sometimes returns more than the 40 asked for. A retry repeats a whole extraction; dropping the tail loses nothing that was verified |
 | Git hooks: `make check` and `make test` both in pre-commit, no pre-push | See "Git hooks" below                                                    |
 | The topic is a frame for the writer, not a source | It tells the model what the post is about and what could hook. Every claim, number and date comes from the facts; a number only in the topic is reported as unverified |
@@ -80,31 +86,31 @@ closed. A decision on an open question is recorded here in the same change that 
 | A first-person opinion: at most 1 per post or thread, in config | "Allowed" was read as "expected": an opinion closed every second tweet. `OPINION_MAX_PER_POST` in `app/config/style.py` |
 | Dates, years, terms, sums, sizes, ages and percentages in digits; small counts may be words | Digits are what the number check sees. "два войска" reads naturally and is not a risk; the risk is a computed interval ("через два года"), which the rule forbids when no fact states it |
 | The thread format rule no longer says "each tweet reads on its own" | It pushed the model to close every tweet with a comment. Replaced by "may be one short sentence, needs no closing line, is never a fragment" |
-| Em and en dash forbidden, a spaced hyphen " - " replaces them | The author's decision. "Replace with a full stop, a comma or a colon" made the model put an awkward comma where the dash was. The rule says the spaced hyphen replaces a dash only, so it does not become a default punctuation mark |
+| Em and en dash forbidden, a spaced hyphen " - " replaces them | The owner's decision. "Replace with a full stop, a comma or a colon" made the model put an awkward comma where the dash was. The rule says the spaced hyphen replaces a dash only, so it does not become a default punctuation mark |
 | Style filter: code checks, then an LLM critic, then up to 2 regenerations | See "Style filter" below |
-| The filter never edits the text; a regeneration is `write_draft` with a `Revision` | One writing path for every change. The text the author gets is always the writer's, checked again |
+| The filter never edits the text; a regeneration is `write_draft` with a `Revision` | One writing path for every change. The text the user gets is always the writer's, checked again |
 | The critic runs even when code already found something | One regeneration then fixes everything at once |
 | The critic quotes an excerpt, and code checks it occurs in the post | The critic can invent a problem in a sentence the post does not have |
 | A critic finding has a verdict after the explanation | The same device as for contradictions: the model reasons first and can withdraw a finding |
 | A critic or regeneration failure never loses the post | The deterministic checks already ran; the post goes out flagged (`critic = failed`, `regeneration_failed`) instead of the bot failing |
 | A regeneration that keeps too little of the text or the facts is rejected, never chosen | HIS-30: the filter compared violations, so a one-sentence version with no violations won. See "Long post size and the regression guard" |
-| A length violation alone does not regenerate | Step 4 already spent its retries on it. The author's decision |
+| A length violation alone does not regenerate | Step 4 already spent its retries on it. The owner's decision |
 | The best version: fewest dangerous violations, then fewest in total, the later on a tie | An unsupported claim is worse than a cliche. The dangerous rules are data, `DANGEROUS_STYLE_RULES` |
-| Hook, rhythm and thread structure are not checked | Subjective; a critic verdict on them would drive regenerations by taste. Prompt and few-shot only. The author's decision |
+| Hook, rhythm and thread structure are not checked | Subjective; a critic verdict on them would drive regenerations by taste. Prompt and few-shot only. The owner's decision |
 | No deterministic triplet check | A list of names from the facts is legitimate. The critic checks rhetorical triplets only |
 | Phrase matching by stems, no morphology library | No new dependency. Words in `BANNED_PHRASE_EXACT_WORDS` match whole, against false positives such as "в заключении мира" |
-| "не просто X, а Y" banned with or without "это" | The author's decision: "Он был не просто город, а крепость" is the same frame |
+| "не просто X, а Y" banned with or without "это" | The owner's decision: "Он был не просто город, а крепость" is the same frame |
 | Default format `short` (`POST_DEFAULT_FORMAT`) | The cheapest first answer, and the only one under which all four buttons make sense. A prefix `тред:`, `лонг:`, `коротко:` picks another format for one topic |
-| A thread needs `THREAD_MIN_FACTS` (5) assertable facts | From 3 facts a thread is 2 tweets, not a thread. Below the threshold a short post is written and the author is told; "в тред" is not offered. See "Bot delivery" below |
+| A thread needs `THREAD_MIN_FACTS` (5) assertable facts | From 3 facts a thread is 2 tweets, not a thread. Below the threshold a short post is written and the user is told; "в тред" is not offered. See "Bot delivery" below |
 | The post goes out as plain text, the facts as escaped HTML | The post must copy without markup. The facts need links; HTML with `html.escape` keeps them short, and facts are split only between whole facts |
 | A long post over 4096 characters is split, not sent as a file | Copying from a file is clumsy on a phone. Paragraphs, then sentences, then spaces; nothing is added to the pieces |
 | State in memory behind the `RunStore` Protocol, `STATE_MAX_RUNS` (20) runs | No database yet (locked). HIS-9 replaces the store with SQLite without touching the pipeline or the handlers |
-| Draft ids are random, not counters | After a restart a counter would map an old button onto a new draft. A random id misses and the author is told the buttons are stale |
-| One job per user, a new request during it is refused, not queued | One author; a queue would hide that a long run is still going. Buttons are answered at once |
+| Draft ids are random, not counters | After a restart a counter would map an old button onto a new draft. A random id misses and the user is told the buttons are stale |
+| One job per user, a new request during it is refused, not queued | One user; a queue would hide that a long run is still going. Buttons are answered at once |
 | A run is cancelled after `PIPELINE_TIMEOUT_SECONDS` (600) | See "Bot delivery" below |
 | A topic is at most `TOPIC_MAX_CHARS` (500) characters; commands and non-text messages get a hint | The topic goes into prompts and, through the plan, into search queries. A pasted article is an input error, not a topic |
 | "другой заход" rotates through fixed angles in `app/prompts/revisions.py` | An extra model call to invent an angle costs a call and is unpredictable. Each angle says it shapes only presentation and order |
-| The topic is logged by length only | It is the author's data, like the post |
+| The topic is logged by length only | It is the user's data, like the post |
 
 ## Details of decided questions
 
@@ -124,7 +130,7 @@ two samples per topic and format, before and after, no examples in both:
   none after.
 - First-person opinions: 4 in 8 samples before, none after.
 - Numbers in words outside the check ("через два года"): 2 before, none after.
-- Dash replaced by a comma: 1 before, none after. Rule 4 then changed: the author allowed a
+- Dash replaced by a comma: 1 before, none after. Rule 4 then changed: the owner allowed a
   spaced hyphen in place of a dash and dropped "replace with a full stop, a comma or a colon".
   The new wording has not been measured live.
 - Not improved: threads are still mostly one fact per tweet, now without the closer, and the text
@@ -173,7 +179,7 @@ HIS-23 decided:
 ### Short post length
 
 Measured in HIS-21: a short post broke `SHORT_MAX_CHARS` (280) after its one retry in 5 of 8
-samples, a retry once grew the text to 538 characters, and the first attempt never fit. The author
+samples, a retry once grew the text to 538 characters, and the first attempt never fit. The reference
 examples did not help (319, 229, 469, 343 characters). The model got every fact of the set, 8 to
 10, and used 6 to 8 of them; "aim well below the limit" did nothing, since a model cannot count
 characters.
@@ -186,7 +192,7 @@ HIS-22 chose two code mechanisms and one prompt change:
   up to `SHORT_LENGTH_RETRIES` (2) times.
 - **A sentence budget** in the format rule replaces "aim well below the limit".
 
-**Tail drop is off by default** (`SHORT_DROP_TAIL=false`), the author's decision. Dropping the
+**Tail drop is off by default** (`SHORT_DROP_TAIL=false`), the owner's decision. Dropping the
 tail loses information, makes `used_fact_ids` inexact (it still lists facts that were in the
 dropped part) and can cut off the second half of a dispute. The mechanism stays behind the flag.
 Even when it is on, it is not applied to a post that contains a number of any disputed fact; such
@@ -199,7 +205,7 @@ Measured with `tests/test_generator_live.py`, DeepSeek, default settings, the Ku
 
 - No examples, 3 samples per topic: all 6 fit. Lengths 178, 169, 109 (Kulikovo) and 238, 231, 189
   (Apollo 11). 5 fit at the first attempt, 1 after one retry; no second retry, no drop.
-- With the author examples, 2 samples per topic: all 4 fit at the first attempt. Lengths 179, 164
+- With the reference examples, 2 samples per topic: all 4 fit at the first attempt. Lengths 179, 164
   and 259, 273.
 - Threads, 2 samples per topic with and without examples, were unchanged in behaviour and all fit.
 
@@ -301,16 +307,16 @@ HIS-8 connected the steps in Telegram (see [pipeline.md](pipeline.md), step 6).
   2 tweets of one or two facts each. 5 assertable facts give 3 or 4 tweets with room for related
   facts to share one. Disputed facts do not count: they can be mentioned only cautiously. This
   closes "fewer facts than a thread needs" from the failure behaviour: a short post instead, with
-  a warning, rather than asking the author.
+  a warning, rather than asking the user.
 - **Timeout.** 600 seconds by default. The live runs below took 26 to 28 s for a topic and 11 to
   15 s for a button, so 600 s is far above a normal run. It is not lower because a single LLM
   attempt may legitimately take up to `LLM_ATTEMPT_TIMEOUT_SECONDS` (300): a total below that
   would cancel a run in which one call was slow but succeeded.
 - **Facts after a button.** Only the facts of the new variant, with their sources and "СПОРНО",
   and a line with the number of the others. The full list is in the first answer and does not
-  change; repeating 20 facts on every click buries the post. The author's decision.
+  change; repeating 20 facts on every click buries the post. The owner's decision.
 - **Progress message** is deleted after a post and turned into the final message otherwise. The
-  author's decision.
+  owner's decision.
 - **Known limits.**
   - A short post is always written from the same 3 facts (`select_short_facts`), so "другой
     заход" of a short post changes the presentation and the first sentence, not the facts.
@@ -324,7 +330,7 @@ HIS-8 connected the steps in Telegram (see [pipeline.md](pipeline.md), step 6).
 
 ### Live runs of the whole pipeline (HIS-8)
 
-`tests/test_pipeline_live.py`, DeepSeek on every step, Tavily `basic`, both Wikipedias, the author
+`tests/test_pipeline_live.py`, DeepSeek on every step, Tavily `basic`, both Wikipedias, the reference
 examples, default settings. Per topic: one topic run (short by default), then the "в тред" button
 on the stored facts. One run per topic, noise-level evidence.
 
@@ -403,7 +409,7 @@ rebuts it; the quote check passed because the quote was verbatim. The same class
 преданию»), versions («по мнению некоторых историков»), what others claim. The rules are in
 [pipeline.md](pipeline.md), step 3, "Stance".
 
-- **The author's decisions:** a field and not text only; lowering to `asserted` without a marker,
+- **The owner's decisions:** a field and not text only; lowering to `asserted` without a marker,
   with a counter; `rebutted_by` instead of a `Dispute`; the labels "версия" and "опровергнуто".
 - **Decided by the implementer:** an unknown stance drops the fact; the context is the quote's
   sentence and one neighbour on each side, inside one Tavily chunk and one line; a verified rebuttal
@@ -452,7 +458,7 @@ noise-level evidence.
 
 #### Round 2: the stance of each support item, the roles, the token budget
 
-The author accepted round 1 in part and asked for three fixes in the same branch, by code where
+The owner accepted round 1 in part and asked for three fixes in the same branch, by code where
 possible.
 
 - **Strong and weak markers.** Strong: what names a legend, a tradition, a myth or a rumour, and the
@@ -462,11 +468,11 @@ possible.
   «apocryphal», whole «legend» and «myth»). Weak: a reported view or a named source, which is
   normal for a sound historical fact: «считается», «утверждается», «по мнению», «по одной из версий»,
   «многие источники», «указывается», «летопись», «хроника», «согласно житию», «according to»,
-  «reportedly». Chronicles are weak on the author's instruction: a fact «согласно летописи» is an
+  «reportedly». Chronicles are weak on the owner's instruction: a fact «согласно летописи» is an
   ordinary sourced fact. Left out on purpose: bare «tradition» and «legendary» (an «Orthodox
   tradition», a «legendary general» are plain facts), and the adjectives «легендарный» and
   «мифический»; the forms of «легенда» and «миф» match whole for this reason. «по оценкам» is in
-  neither list (the author's decision): estimates with their attribution stay `asserted`.
+  neither list (the owner's decision): estimates with their attribution stay `asserted`.
 - **The raise by code.** For every support item of an asserted fact, a strong marker in the quote's
   sentence or a neighbour makes the fact `claimed` and `single`. Weak markers never raise. Not
   raised: a support item whose own sentence opens with a rebuttal opener and has no strong marker,
@@ -532,7 +538,7 @@ Known gaps, open:
 
 Round 2 left the 30 февраля myth asserted when a page stated it as its own conclusion («Таким
 образом, ... существовало 30 февраля») and the contradiction pass did not pair it with «30 февраля
-в нём не было». The author chose the prompt, not a code heuristic: no code links facts by equal
+в нём не было». The owner chose the prompt, not a code heuristic: no code links facts by equal
 numbers.
 
 - **Decided.** The contradiction prompt says that a claim that something was and a claim that it was
@@ -581,6 +587,115 @@ Known gaps, open:
   disagree where they do not. Seen before HIS-21 and again here; not addressed.
 - A group can be wider than the contradiction: facts that agree with each other are pulled in with
   the one that denies them.
+
+### Topic relevance (HIS-27)
+
+Seen in live runs after HIS-8, HIS-28 and HIS-32: the 20 facts of the Soviet daily life topic held
+facts about an exhibition and its materials, facts from the 1960s and 1970s, and many facts on one
+aspect, and the short post was written from three facts about the exhibition. The rules are in
+[pipeline.md](pipeline.md), step 3, "Relevance".
+
+#### Diagnosis
+
+Data: the recorded research of HIS-32 (34 snippets for the Soviet topic, 27 for Kulikovo) and the
+three recorded extraction replies of each topic (`his32_before`, `his32_after2`, `his32_after`),
+replayed through the code of HIS-32 without API calls. Every verified fact before the cut was
+classed by hand: **R** answers the topic, **M** about a source (an exhibition, a researcher, how the
+topic is perceived), **P** outside the period, **D** a near repeat of another fact, **G** general
+background of the era or another subject.
+
+| | R | M | G | D | P |
+| --- | --- | --- | --- | --- | --- |
+| Soviet, verified (98 in 3 replies) | 50 | 12 | 29 | 7 | 0 |
+| Soviet, kept (60 places) | 33 | 4 | 18 | 5 | 0 |
+| Soviet, cut (36) | 16 | 8 | 11 | 1 | 0 |
+| Kulikovo, verified (109) | 97 | 4 | 3 | 5 | 0 |
+| Kulikovo, cut (30) | 23 | 1 | 3 | 3 | 0 |
+
+- Of the 16 relevant Soviet facts cut, 10 stood on weak sources only (HIS-28 by design) and 6 were
+  cut by the model's order alone (hunger and queues, absenteeism, the six-day week, Stakhanov's
+  record, temporary housing, «культурность»). Kulikovo lost causes, consequences and the preparation
+  of the battle, which the model returned last.
+- M by domain: pikabu.ru 8 (how the 1930s are perceived), historyrussia.org 4 (the exhibition, not
+  weak, so it reached the writer). D: Stakhanov repeated by baidu.com, istmat.org and archive74.ru,
+  so the per-domain cap does not see them. P appeared only in a HIS-32 round 1 run with no recorded
+  reply: 5 of 22 facts (1969, the 1960s, 1976 twice, the USA in the 1930s).
+- The short post (the first 3 facts): Soviet R G R, **M M M**, R R D; Kulikovo always the date, the
+  sides, the names or the outcome.
+- Queries were varied. One query of five, «историки о повседневности», brings historiography: in the
+  HIS-28 run 9 of 20 kept facts were about a researcher or the study of the topic. Of 11 Wikipedia
+  snippets of the Soviet topic 5 were off the topic (Азербайджанцы twice, Алмазная, the Afghan war,
+  the Great Depression); they gave no facts.
+- **Where relevance is lost:** not in the queries and not in the search but in the order. The
+  extraction model returns facts snippet by snippet (round 2 opened with the four exhibition facts)
+  although the prompt already asks for the most relevant first; the limit and the short selection
+  then take the first ones.
+
+#### Decided
+
+- **One fix: a ranking pass.** An extraction prompt rule was not chosen: the prompt already asks for
+  relevance first and is ignored, M is 12% of the facts, and a change to the 12000-token extraction
+  could not be compared on recorded replies. A code period filter on its own was not chosen: the
+  replays had no P fact and the Kulikovo topic names no year. It became a check of the model's flag
+  after the first live run (see the table above).
+- **The owner's decisions:** aspects with turns, capped at 8 distinct aspects; turns only among
+  relevance 2 and 3; off-topic facts set aside with the floor `max(FACTS_MIN_FACTS,
+  THREAD_MIN_FACTS)`; `FACTS_RELEVANCE_ENABLED` on by default; a narrow `about_source`; a fact with no
+  claim gets relevance 0; direct causes and consequences are not outside the period.
+- **Decided by the implementer:** the pass is on the `fact_extraction` step, after the
+  contradictions; disputed and attributed facts are not ranked; a fact with no valid entry counts as
+  relevance 2 of the aspect `other`; any `LLMError` falls back to the model's order; the code check of
+  `outside_period` with a margin of 10 years; the short selection is unchanged in code and follows the
+  new order.
+
+#### Live check
+
+`tests/test_relevance_live.py`, DeepSeek, the recorded research and extraction replies (no Tavily
+credits). For each recorded reply: "before" is the replay with the ranking off, "after" the same
+replay with one live ranking call. Texts after were written for one reply per topic (Soviet
+`his32_after2`, Kulikovo `his32_after`): a short post, "в тред" and a long post. Three runs: the first
+showed the wrong `outside_period` flags, the second three wrong `about_source` flags on Kulikovo
+(«Епифаний ... сообщает», «По оценкам историков», the memorial day), the third is the code as it
+stands. 97 DeepSeek calls over the three runs. Numbers of the third run (the Karamzin fact about the
+term is counted as R, by the narrow `about_source`):
+
+| | Soviet, before | Soviet, after | Kulikovo, before | Kulikovo, after |
+| --- | --- | --- | --- | --- |
+| Facts shown over 3 replies | 62 | 62 | 79 | 79 |
+| R / M / G / D | 34 / 4 / 18 / 6 | 41 / 0 / 16 / 5 | 77 / 0 / 0 / 2 | 77 / 0 / 0 / 2 |
+| Short posts made of M facts | 1 of 3 (M M M) | 0 | 0 | 0 |
+| Set aside: about a source / outside / relevance 0 | | 4 / 0 / 1 | | 0 / 0 / 1 |
+| `outside_period` flags dropped by code | | 6 | | 0 |
+| `InsufficientFacts` | 0 | 0 | 0 | 0 |
+
+- **Soviet, the exhibition reply:** the four exhibition facts and two background facts left; hunger,
+  absenteeism, the six-day week, Stakhanov's record and two housing facts came in. The short post
+  went from three exhibition facts to housing, working hours and housing. The latest reply lost two
+  of eight Stakhanov facts and the congress, and gained «культурность» and temporary housing.
+- **Kulikovo:** the set is about the battle in all replies, so relevance changes little; the turns
+  of aspects brought in causes (tribute of 1371 and 1374) and consequences (tribute stopped, the
+  throne passed without a yarlyk) in place of the camp on 6 September, Mamai's headquarters and a
+  second «turning point» fact. The short post is still the date, the sides and the names: that is a
+  question of a hook (HIS-25), not of relevance.
+- **Set aside wrongly in the third run:** none of the M facts was a normal fact. One fact with
+  relevance 0 is arguable: «Сталин ... провозгласил это движение всенародным» (G by hand). The model is
+  not stable: the same input gave three wrong `about_source` flags in the second run and none in the
+  third.
+- **Not improved:** G facts (the number of workers, hidden unemployment, free education) still fill
+  a third of the Soviet list, because the model scores them 1 or 2 and there are not enough R facts
+  to replace them. The Kulikovo thread after the ranking was 2 tweets of 4 facts; the writer, not the
+  facts, decided that.
+- **Cost:** one call per topic on the `fact_extraction` step, none for the buttons. Its time was not
+  measured separately.
+
+Known gaps, open:
+
+- `about_source` depends on the model alone; a wrong flag loses a normal fact unless the floor brings
+  it back. Counted in `facts_about_source`, never shown by text in the bot.
+- A topic that names a century in Roman numerals or an era by name gets no period check, so
+  `outside_period` never sets a fact aside for it.
+- The planning prompt asks for "how historians assess it", which brings historiography for a topic
+  about a way of life. Not changed here.
 
 ### Wikipedia extracts
 
@@ -647,7 +762,7 @@ DeepSeek copies quotes verbatim; normalisation was needed once (`""` for `«»`)
 Plain git hooks in `.githooks/`, enabled by `make setup-hooks` (`core.hooksPath`), with no hook
 framework and no new dependency. `.githooks/pre-commit` runs `make check` and then `make test`.
 
-- Timing, measured on the author's machine (HIS-20): `make test` took 3.2 to 4.1 s wall time over
+- Timing, measured on the owner's machine (HIS-20): `make test` took 3.2 to 4.1 s wall time over
   three runs (326 tests, pytest itself 2.6 to 3.1 s), `make check` 0.7 s. The threshold was about
   20 s, so `make test` goes in pre-commit and there is no pre-push hook.
 - Revisit: if `make test` grows past about 20 s, move it to a `pre-push` hook and keep `make check`
@@ -717,7 +832,7 @@ decided.
 ### Images
 
 Pictures for posts are planned through Wikimedia Commons, **later**. Open: how an image is picked,
-how its licence and attribution are shown to the author, and whether the bot suggests or attaches
+how its licence and attribution are shown to the user, and whether the bot suggests or attaches
 it. The `images` scope is reserved. No code until a ticket for it exists.
 
 ### Length limits
@@ -757,7 +872,7 @@ What happens when the critic keeps finding violations after the 2 allowed regene
 
 - Implemented in HIS-7 as the provisional default (in [pipeline.md](pipeline.md), step 5): deliver
   the best version with the unresolved violations listed.
-- To settle: whether the author prefers a hard stop, and whether the dangerous rules should block
+- To settle: whether the owner prefers a hard stop, and whether the dangerous rules should block
   delivery rather than only weigh more.
 
 ### Persistence content

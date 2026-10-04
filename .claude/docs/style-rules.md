@@ -8,16 +8,16 @@ Posts are in Russian. This document is in English; the Russian examples are the 
 
 ## Voice
 
-1. **Russian, about the facts.** When the author speaks of themself it is in the first person,
-   "я", but the post is about the facts, not about the author. The rule used to say "write in the
+1. **Russian, about the facts.** When the post speaks of its writer it is in the first person,
+   "я", but the post is about the facts, not about the writer. The rule used to say "write in the
    first person", and the model read it as a request to put "я" into every post.
 2. **A first-person opinion is allowed, rarely.** At most `OPINION_MAX_PER_POST` (1) in a post or
    in a whole thread, and a post may well have none. It is about what the facts show and reads as
    a judgement, not a claim of fact: "Мне кажется, это была ошибка." It is never the habitual
    closing line of a part: "Считаю, что прозвище здесь точнее любой летописной похвалы." after a
    fact is the defect this rule exists for.
-3. **Invented personal experience is forbidden.** The author did not see, visit or witness
-   anything the bot cannot know. Never "я видел", "я был там", "когда я стоял у этих стен",
+3. **Invented personal experience is forbidden.** The writer of the post did not see, visit
+   or witness anything the bot cannot know. Never "я видел", "я был там", "когда я стоял у этих стен",
    "мне довелось". The bot has facts and an opinion, not a biography.
 
 ## Punctuation
@@ -70,7 +70,7 @@ Posts are in Russian. This document is in English; the Russian examples are the 
 
 9. **No emoji.**
 10. **No hashtags.**
-11. **No question to the reader at the end,** unless the author explicitly asked for one in the
+11. **No question to the reader at the end,** unless the user explicitly asked for one in the
     request.
 
 ## Length
@@ -125,7 +125,7 @@ qualifier.
 
 ## Few-shot examples
 
-The author's voice is set mainly by examples, not by rules.
+The voice is set mainly by examples, not by rules.
 
 - Reference posts are Markdown files (`*.md`) in `data/examples/`, one post per file. Hidden
   files, `.gitkeep`, other extensions and empty files are ignored.
@@ -133,7 +133,7 @@ The author's voice is set mainly by examples, not by rules.
   the writing prompt simply omits the examples block, and nothing fails.
 - The number of examples included in a prompt is a config value. Selection (all, the most recent,
   the most similar to the topic) is an open question in [decisions.md](decisions.md).
-- Examples are the author's own writing or posts the author approved. They are never generated
+- Examples are the user's own writing or posts the user approved. They are never generated
   by the bot and fed back in.
 
 ## How the rules are enforced
@@ -159,7 +159,7 @@ filter is step 5 in [pipeline.md](pipeline.md).
 
 A deterministic check is a hard gate. A critic finding is also a gate (it triggers a
 regeneration), but the critic is a model and can be wrong, so its findings are shown to the
-author if the attempts run out, and an excerpt the critic quotes must occur in the post or the
+user if the attempts run out, and an excerpt the critic quotes must occur in the post or the
 finding is dropped. When the attempts run out, the version with the fewest dangerous violations
 (`DANGEROUS_STYLE_RULES`: unsupported claims, unverified numbers, ambiguous pronouns, invented
 experience) goes out, then the fewest violations in total.

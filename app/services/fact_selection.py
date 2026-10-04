@@ -1,10 +1,12 @@
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from app.config.constants import RELEVANCE_ROTATION_MIN
 from app.domain.fact import FactStatus, SourceRef, all_weak
+from app.services.fact_relevance import FactRelevance
 
 PRIORITY_CONFIRMED = 0
 PRIORITY_SINGLE = 1
@@ -26,6 +28,8 @@ class Selection(BaseModel):
     cut_by_limit: int = 0
     cut_by_domain_cap: int = 0
     restored_by_floor: int = 0
+    set_aside_off_topic: int = 0
+    off_topic_restored: int = 0
 
 
 def fact_priority(item: Selectable) -> int:
@@ -34,6 +38,29 @@ def fact_priority(item: Selectable) -> int:
     if all_weak(item.support):
         return PRIORITY_WEAK_ONLY
     return PRIORITY_SINGLE
+
+
+type SortKey = tuple[int, int, int, int]
+
+
+def rank_order(
+    items: Sequence[Selectable],
+    candidates: Sequence[int],
+    relevance: Mapping[int, FactRelevance],
+) -> list[int]:
+    default = FactRelevance()
+    seen: Counter[tuple[int, int, str]] = Counter()
+    keys: dict[int, SortKey] = {}
+    for position, index in enumerate(candidates):
+        score = relevance.get(index, default)
+        priority = fact_priority(items[index])
+        rotation = 0
+        if score.relevance >= RELEVANCE_ROTATION_MIN:
+            group = (priority, score.relevance, score.aspect)
+            rotation = seen[group]
+            seen[group] += 1
+        keys[index] = (priority, -score.relevance, rotation, position)
+    return sorted(candidates, key=keys.__getitem__)
 
 
 def cap_domains(support: Sequence[SourceRef]) -> list[str]:
@@ -66,8 +93,12 @@ def select_facts(
     max_facts: int,
     floor: int,
     max_per_domain: int | None,
+    relevance: Mapping[int, FactRelevance] | None = None,
 ) -> Selection:
-    ordered = sorted(candidates, key=lambda index: fact_priority(items[index]))
+    scores = relevance or {}
+    off_topic = {index for index in candidates if index in scores and scores[index].off_topic}
+    ordered = rank_order(items, [index for index in candidates if index not in off_topic], scores)
+    aside = rank_order(items, [index for index in candidates if index in off_topic], scores)
     admitted, displaced = (
         (list(ordered), [])
         if max_per_domain is None
@@ -76,10 +107,13 @@ def select_facts(
     kept = admitted[:max_facts]
     missing = max(min(floor, max_facts) - len(kept), 0)
     restored = displaced[:missing]
-    rank = {index: position for position, index in enumerate(ordered)}
+    returned = aside[: missing - len(restored)]
+    rank = {index: position for position, index in enumerate(ordered + aside)}
     return Selection(
-        kept=tuple(sorted(kept + restored, key=rank.__getitem__)),
+        kept=tuple(sorted(kept + restored + returned, key=rank.__getitem__)),
         cut_by_limit=len(admitted) - len(kept),
         cut_by_domain_cap=len(displaced) - len(restored),
         restored_by_floor=len(restored),
+        set_aside_off_topic=len(aside) - len(returned),
+        off_topic_restored=len(returned),
     )

@@ -5,20 +5,21 @@ detailed guides in `.claude/docs/` before touching any code.
 
 ## Product
 
-A personal Telegram bot for the author of a history account on X. The author sends a topic.
-The bot gathers facts from sources (Wikipedia ru/en, Tavily web search) and writes a post or
-a thread in Russian. The author reviews it and publishes it by hand. The bot never touches X.
+A Telegram bot for a user who writes history posts for X. The user sends a topic. The bot
+gathers facts from sources (Wikipedia ru/en, Tavily web search) and writes a post or a thread in
+Russian. The user reviews it and publishes it by hand. The bot never touches X.
 
 The main risk is that an LLM invents dates, numbers and quotes. So the pipeline is
 "research -> facts with sources -> post written only from facts", never "request -> post".
 The second goal is text that does not read like AI slop: a deterministic style filter, an LLM
-critic pass and few-shot examples written by the author.
+critic pass and few-shot examples written by the user.
 
 Two halves, with different risk profiles:
 
 - **Factual integrity.** Every claim in a post traces to a fact, every fact carries a verbatim
   quote from a source snippet, and code (not the model) checks both links.
-- **Voice.** The post must sound like one specific author. Style is enforced by deterministic
+- **Voice.** The post must keep one consistent voice, set by the user's reference posts. Style is
+  enforced by deterministic
   checks, a critic pass and few-shot examples. See
   [`.claude/docs/style-rules.md`](.claude/docs/style-rules.md).
 
@@ -29,7 +30,7 @@ Do not revisit these without an explicit instruction from the user.
 | Decision          | Choice                                                                                                                         | Consequence                                                                                                         |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | Users             | One user. Access by a whitelist of Telegram IDs.                                                                               | No multi-user code, no accounts, no per-user settings. Messages from any other ID are ignored.                      |
-| Publishing to X   | The bot never publishes. There is no X client code.                                                                            | Do not add an X API dependency, token or module. The author publishes by hand.                                      |
+| Publishing to X   | The bot never publishes. There is no X client code.                                                                            | Do not add an X API dependency, token or module. The user publishes by hand.                                        |
 | Source of text    | A post is written only from a list of facts with sources.                                                                      | The writing step receives facts, never raw snippets. The topic is a frame, not a source. Numbers and dates are verified against facts. |
 | LLM providers     | Anthropic and DeepSeek behind one interface. The provider is chosen by config separately for each pipeline step. Start with DeepSeek. | Steps: `query_planning`, `fact_extraction`, `writing`, `style_critique`. Switching a step is a config change only.  |
 | Storage           | No database first, then SQLite.                                                                                                | Early iterations keep state in memory and in files. `app/db` appears later and uses SQLite.                         |
@@ -100,7 +101,10 @@ added the weak domains and the per-domain cap: `SourceRef.weak`, `is_weak_source
 `app/services/source_domain.py` and the selection rules in `app/services/fact_selection.py`. HIS-32
 added the stance of a claim: `ClaimStance` and `Fact.stance`/`rebutted_by` in `app/domain/fact.py`, the
 marker check in `app/services/stance.py` with its data in `app/config/stance.py`, and the attributed
-claims block of the writer and critic prompts. `db` does not exist yet.
+claims block of the writer and critic prompts. HIS-27 added the relevance ranking of the facts: the
+pass in `app/services/facts.py`, its models and the period check in `app/services/fact_relevance.py`,
+the order by relevance and aspect in `app/services/fact_selection.py` and the prompt in
+`app/prompts/fact_relevance.py`. `db` does not exist yet.
 
 ## Detailed guides
 
@@ -129,10 +133,10 @@ These override any default behaviour.
 6. **Import direction is `bot -> services -> llm / research`.** Never the other way.
 7. **Smallest possible change.** No side refactoring.
 8. **No new dependencies** without agreement.
-9. **Never run git commands that write.** No commit, no push, no branch, no PR. The author does
+9. **Never run git commands that write.** No commit, no push, no branch, no PR. The owner does
    that after review.
 10. **Anything found outside the task is not fixed in the same branch.** Describe it in the
-    report so the author can open a separate ticket.
+    report so the owner can open a separate ticket.
 
 ## Workflow expectations
 

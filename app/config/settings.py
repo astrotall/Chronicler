@@ -20,6 +20,7 @@ from app.config.constants import (
     FACTS_DEFAULT_MAX_PER_DOMAIN,
     FACTS_DEFAULT_MIN_FACTS,
     FACTS_DEFAULT_MIN_QUOTE_CHARS,
+    FACTS_DEFAULT_RELEVANCE_ENABLED,
     FACTS_DEFAULT_WEAK_DOMAINS,
     FACTS_DOMAIN_GROUPS_SEPARATOR,
     FACTS_DOMAIN_MEMBERS_SEPARATOR,
@@ -144,6 +145,7 @@ class Settings(BaseSettings):
         default_factory=lambda: list(FACTS_DEFAULT_WEAK_DOMAINS)
     )
     facts_max_per_domain: int = Field(default=FACTS_DEFAULT_MAX_PER_DOMAIN, ge=1)
+    facts_relevance_enabled: bool = FACTS_DEFAULT_RELEVANCE_ENABLED
 
     short_max_chars: int = Field(default=SHORT_DEFAULT_MAX_CHARS, ge=1)
     short_max_facts: int = Field(default=SHORT_DEFAULT_MAX_FACTS, ge=1)

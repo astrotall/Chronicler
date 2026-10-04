@@ -1,5 +1,9 @@
+from collections.abc import Mapping
+
 import pytest
+from app.config.constants import RELEVANCE_OTHER_ASPECT
 from app.domain.fact import FactStatus, SourceRef
+from app.services.fact_relevance import FactRelevance
 from app.services.fact_selection import (
     PRIORITY_CONFIRMED,
     PRIORITY_SINGLE,
@@ -39,6 +43,7 @@ def select(
     max_facts: int = 20,
     floor: int = 0,
     max_per_domain: int | None = None,
+    relevance: Mapping[int, FactRelevance] | None = None,
 ) -> Selection:
     return select_facts(
         items,
@@ -46,7 +51,12 @@ def select(
         max_facts=max_facts,
         floor=floor,
         max_per_domain=max_per_domain,
+        relevance=relevance,
     )
+
+
+def scored(relevance: int, aspect: str = RELEVANCE_OTHER_ASPECT) -> FactRelevance:
+    return FactRelevance(relevance=relevance, aspect=aspect)
 
 
 def test_priority_has_three_steps() -> None:
@@ -229,3 +239,130 @@ def test_no_domain_exceeds_the_cap_when_the_floor_is_zero(cap: int) -> None:
 
     domains = [items[index].support[0].domain for index in kept]
     assert max(domains.count(domain) for domain in set(domains)) <= cap
+
+
+def test_relevance_orders_facts_inside_a_level_never_across_levels() -> None:
+    items = [
+        single("a.org"),
+        confirmed("b.org", "c.org"),
+        single("d.org"),
+        single("e.org", weak=True),
+    ]
+    relevance = {0: scored(1), 1: scored(1), 2: scored(3), 3: scored(3)}
+
+    assert select(items, relevance=relevance).kept == (1, 2, 0, 3)
+
+
+def test_higher_relevance_goes_first_inside_a_level() -> None:
+    items = [single("a.org") for _ in range(4)]
+    relevance = {0: scored(1), 1: scored(2), 2: scored(3), 3: scored(2)}
+
+    assert select(items, relevance=relevance).kept == (2, 1, 3, 0)
+
+
+def test_shared_aspects_take_turns() -> None:
+    items = [single("a.org") for _ in range(5)]
+    aspects = ["хлеб", "хлеб", "хлеб", "жильё", "жильё"]
+    relevance = {index: scored(3, aspect) for index, aspect in enumerate(aspects)}
+
+    assert select(items, relevance=relevance).kept == (0, 3, 1, 4, 2)
+
+
+def test_unique_aspects_keep_the_model_order() -> None:
+    items = [single("a.org") for _ in range(5)]
+    relevance = {index: scored(3, f"аспект {index}") for index in range(5)}
+
+    assert select(items, relevance=relevance).kept == (0, 1, 2, 3, 4)
+
+
+def test_aspects_take_turns_only_inside_one_relevance() -> None:
+    items = [single("a.org") for _ in range(4)]
+    relevance = {
+        0: scored(3, "хлеб"),
+        1: scored(3, "хлеб"),
+        2: scored(2, "жильё"),
+        3: scored(3, "работа"),
+    }
+
+    assert select(items, relevance=relevance).kept == (0, 3, 1, 2)
+
+
+def test_marginal_facts_follow_in_the_model_order_without_turns() -> None:
+    items = [single("a.org") for _ in range(5)]
+    relevance = {
+        0: scored(1, "хлеб"),
+        1: scored(1, "хлеб"),
+        2: scored(1, "жильё"),
+        3: scored(2, "хлеб"),
+        4: scored(1, "хлеб"),
+    }
+
+    assert select(items, relevance=relevance).kept == (3, 0, 1, 2, 4)
+
+
+def test_the_limit_now_cuts_the_least_relevant_and_most_repeated() -> None:
+    items = [single(f"{name}.org") for name in "abcdef"]
+    aspects = ["хлеб", "хлеб", "хлеб", "хлеб", "жильё", "работа"]
+    relevance = {index: scored(3, aspect) for index, aspect in enumerate(aspects)}
+
+    selection = select(items, max_facts=3, relevance=relevance)
+
+    assert selection.kept == (0, 4, 5)
+    assert selection.cut_by_limit == 3
+
+
+def test_off_topic_facts_are_set_aside_in_every_level() -> None:
+    items = [confirmed("a.org", "b.org"), single("c.org"), single("d.org"), single("e.org")]
+    relevance = {
+        0: FactRelevance(relevance=3, about_source=True),
+        1: FactRelevance(relevance=3, outside_period=True),
+        2: scored(0),
+        3: scored(1),
+    }
+
+    selection = select(items, relevance=relevance)
+
+    assert selection.kept == (3,)
+    assert (selection.set_aside_off_topic, selection.off_topic_restored) == (3, 0)
+
+
+def test_the_floor_brings_back_capped_facts_before_off_topic_ones_and_puts_these_last() -> None:
+    items = [single("a.org"), single("a.org"), confirmed("b.org", "c.org"), single("d.org")]
+    relevance = {0: scored(3), 1: scored(3), 2: FactRelevance(about_source=True), 3: scored(0)}
+
+    selection = select(items, max_per_domain=1, floor=4, relevance=relevance)
+
+    assert selection.kept == (0, 1, 2, 3)
+    assert selection.restored_by_floor == 1
+    assert (selection.set_aside_off_topic, selection.off_topic_restored) == (0, 2)
+
+
+def test_the_floor_takes_off_topic_facts_in_priority_order() -> None:
+    items = [single("a.org"), single("b.org", weak=True), confirmed("c.org", "d.org")]
+    relevance = {0: scored(0), 1: scored(0), 2: scored(0)}
+
+    selection = select(items, floor=2, relevance=relevance)
+
+    assert selection.kept == (2, 0)
+    assert selection.set_aside_off_topic == 1
+
+
+def test_unscored_facts_count_as_useful_context() -> None:
+    items = [single("a.org") for _ in range(3)]
+    relevance = {1: scored(3), 2: scored(1)}
+
+    assert select(items, relevance=relevance).kept == (1, 0, 2)
+
+
+@pytest.mark.parametrize("relevance", [None, {}])
+def test_without_scores_the_order_is_the_old_one(
+    relevance: dict[int, FactRelevance] | None,
+) -> None:
+    items = [
+        single("a.org", weak=True),
+        single("b.org"),
+        confirmed("c.org", "d.org"),
+        single("e.org"),
+    ]
+
+    assert select(items, relevance=relevance).kept == (2, 1, 3, 0)
