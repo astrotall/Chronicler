@@ -43,6 +43,18 @@ def status_rank(fact: Fact) -> int:
     return STATUS_PRIORITY.get(fact.status, len(STATUS_PRIORITY))
 
 
+def restrict_to(fact_set: FactSet, chosen: set[str]) -> FactSet:
+    return FactSet(
+        topic=fact_set.topic,
+        facts=[fact for fact in fact_set.facts if fact.id in chosen],
+        disputes=[
+            dispute
+            for dispute in fact_set.disputes
+            if any(fact_id in chosen for fact_id in dispute.fact_ids)
+        ],
+    )
+
+
 def select_short_facts(fact_set: FactSet, max_facts: int) -> FactSet:
     disputed = disputed_ids(fact_set)
     assertable = sorted(assertable_facts(fact_set), key=status_rank)
@@ -53,15 +65,7 @@ def select_short_facts(fact_set: FactSet, max_facts: int) -> FactSet:
             chosen |= unit
     if not chosen and units:
         chosen = units[0]
-    return FactSet(
-        topic=fact_set.topic,
-        facts=[fact for fact in fact_set.facts if fact.id in chosen],
-        disputes=[
-            dispute
-            for dispute in fact_set.disputes
-            if any(fact_id in chosen for fact_id in dispute.fact_ids)
-        ],
-    )
+    return restrict_to(fact_set, chosen)
 
 
 def is_abbreviation(text: str, position: int) -> bool:

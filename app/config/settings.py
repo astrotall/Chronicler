@@ -49,6 +49,8 @@ from app.config.constants import (
     TAVILY_DEFAULT_MAX_RESULTS,
     TAVILY_MAX_CHUNKS_PER_SOURCE,
     TAVILY_MAX_RESULTS_LIMIT,
+    THREAD_DEFAULT_MAX_ATTRIBUTED,
+    THREAD_DEFAULT_MAX_FACTS,
     THREAD_DEFAULT_MAX_TWEETS,
     THREAD_DEFAULT_MIN_FACTS,
     THREAD_DEFAULT_MIN_TWEETS,
@@ -161,6 +163,8 @@ class Settings(BaseSettings):
     thread_max_tweets: int = Field(default=THREAD_DEFAULT_MAX_TWEETS, ge=THREAD_MIN_TWEETS)
     thread_min_tweets: int = Field(default=THREAD_DEFAULT_MIN_TWEETS, ge=0)
     thread_min_used_facts: int = Field(default=THREAD_DEFAULT_MIN_USED_FACTS, ge=0)
+    thread_max_facts: int = Field(default=THREAD_DEFAULT_MAX_FACTS, ge=0)
+    thread_max_attributed: int = Field(default=THREAD_DEFAULT_MAX_ATTRIBUTED, ge=0)
     thread_numbering: bool = False
 
     examples_dir: Path = Path(EXAMPLES_DEFAULT_DIR)
@@ -239,6 +243,12 @@ class Settings(BaseSettings):
     def require_thread_facts_agree(self) -> Self:
         if self.thread_min_used_facts > self.thread_min_facts:
             raise ValueError("THREAD_MIN_USED_FACTS must not exceed THREAD_MIN_FACTS")
+        return self
+
+    @model_validator(mode="after")
+    def require_thread_selection_covers_the_gate(self) -> Self:
+        if self.thread_max_facts and self.thread_max_facts < self.thread_min_facts:
+            raise ValueError("THREAD_MAX_FACTS must not be below THREAD_MIN_FACTS")
         return self
 
     @model_validator(mode="after")

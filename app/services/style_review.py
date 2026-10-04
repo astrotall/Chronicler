@@ -20,7 +20,7 @@ from app.domain.style import CriticStatus, StyleReport, StyleResult, StyleRule, 
 from app.llm.client import LLMClient
 from app.llm.errors import LLMError
 from app.prompts.style_critique import render_style_revision
-from app.services.generator import WritingLimits, thread_size, write_draft
+from app.services.generator import WritingLimits, facts_for_prompt, thread_size, write_draft
 from app.services.style_critic import CriticOutcome, critique_draft
 from app.services.style_filter import check_draft
 
@@ -221,7 +221,8 @@ async def review_style(
     angle: str | None = None,
     allow_closing_question: bool = False,
 ) -> StyleResult:
-    size = thread_size(draft.post_format, writing_limits, fact_set)
+    offered = facts_for_prompt(fact_set, draft.post_format, writing_limits)
+    size = thread_size(draft.post_format, writing_limits, offered)
     evaluations = [await evaluate(critic, draft, fact_set, style_limits, allow_closing_question)]
     forbidden: list[str] = []
     regenerations = 0

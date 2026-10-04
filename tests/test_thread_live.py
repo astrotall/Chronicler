@@ -10,7 +10,8 @@ from app.domain.draft import Draft, LengthIssue, PostFormat
 from app.domain.fact import FactSet
 from app.domain.style import StyleResult
 from app.llm.factory import LLMClientFactory, build_http_client
-from app.services.generator import WritingLimits, thread_size, write_draft
+from app.prompts.writing import assertable_facts
+from app.services.generator import WritingLimits, facts_for_prompt, thread_size, write_draft
 from app.services.style_review import StyleLimits, review_style
 
 from fact_snapshot import load_fact_set
@@ -20,7 +21,7 @@ from test_generator_live import live_settings
 
 KEYS = LiveKeys()
 OUTPUT_DIR = Path("data/comparisons")
-OUTPUT_TEMPLATE = "his40_{slug}.json"
+OUTPUT_TEMPLATE = "his42_{slug}.json"
 SAMPLES_PER_SET = 3
 NO_EXAMPLES: tuple[str, ...] = ()
 FIRST_TWEET_PHRASE_MAX_CHARS = 160
@@ -58,11 +59,25 @@ def facts_per_tweet(draft: Draft) -> float:
 
 
 def sample_report(
-    index: int, sample: Sample, ceiling: int, include_text: bool
+    index: int, sample: Sample, offered: FactSet, ceiling: int, include_text: bool
 ) -> dict[str, object]:
     chosen = sample.result.draft
+    assertable_ids = {fact.id for fact in assertable_facts(offered)}
+    attributed = [fact for fact in offered.facts if fact.id not in assertable_ids]
     report: dict[str, object] = {
         "sample": index,
+        "offered_facts": len(offered.facts),
+        "offered_assertable": len(assertable_ids),
+        "attributed_offered": [
+            {
+                "id": fact.id,
+                "stance": fact.stance.value,
+                "status": fact.status.value,
+                "text": fact.text,
+                "used": fact.id in chosen.used_fact_ids,
+            }
+            for fact in attributed
+        ],
         "tweets": len(chosen.parts),
         "used_facts": len(chosen.used_fact_ids),
         "facts_per_tweet": facts_per_tweet(chosen),
@@ -108,10 +123,10 @@ def save_report(slug: str, report: dict[str, object]) -> None:
     )
 
 
-def check_sample(sample: Sample, fact_set: FactSet, limits: WritingLimits) -> None:
+def check_sample(sample: Sample, offered: FactSet, limits: WritingLimits) -> None:
     draft = sample.result.draft
-    size = thread_size(PostFormat.THREAD, limits, fact_set)
-    known = {fact.id for fact in fact_set.facts}
+    size = thread_size(PostFormat.THREAD, limits, offered)
+    known = {fact.id for fact in offered.facts}
     assert set(draft.used_fact_ids) <= known
     flagged = {violation.issue for violation in draft.length_violations}
     assert len(draft.parts) <= limits.thread_max_tweets or LengthIssue.TOO_MANY_PARTS in flagged
@@ -129,6 +144,7 @@ async def test_live_thread_keeps_its_minimum(
     fact_set = load_fact_set(case.snapshot)
     settings: Settings = live_settings()
     writing_limits = WritingLimits.from_settings(settings)
+    offered = facts_for_prompt(fact_set, PostFormat.THREAD, writing_limits)
     style_limits = StyleLimits.from_settings(settings)
     samples: list[Sample] = []
     async with build_http_client(settings) as http_client:
@@ -168,18 +184,24 @@ async def test_live_thread_keeps_its_minimum(
     report: dict[str, object] = {
         "topic": fact_set.topic,
         "format": PostFormat.THREAD.value,
-        "offered_facts": len(fact_set.facts),
+        "facts_total": len(fact_set.facts),
+        "offered_facts": len(offered.facts),
+        "offered_ids": [fact.id for fact in offered.facts],
+        "thread_max_facts": writing_limits.thread_max_facts,
+        "thread_max_attributed": writing_limits.thread_max_attributed,
         "thread_min_tweets": writing_limits.thread_min_tweets,
         "thread_min_used_facts": writing_limits.thread_min_used_facts,
-        "effective_size": thread_size(PostFormat.THREAD, writing_limits, fact_set).model_dump(),
+        "effective_size": thread_size(PostFormat.THREAD, writing_limits, offered).model_dump(),
         "requests_total": requests,
         "requests_writer": len(writer.prompts),
         "requests_critic": len(critic.prompts),
         "samples": [
-            sample_report(index, sample, writing_limits.thread_max_tweets, include_text=True)
+            sample_report(
+                index, sample, offered, writing_limits.thread_max_tweets, include_text=True
+            )
             for index, sample in enumerate(samples, start=1)
         ],
     }
     save_report(case.slug, report)
     for sample in samples:
-        check_sample(sample, fact_set, writing_limits)
+        check_sample(sample, offered, writing_limits)

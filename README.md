@@ -212,8 +212,10 @@ Every setting with its default is in [`.env.example`](.env.example). The main gr
   `FACTS_MAX_PER_DOMAIN` (6), `FACTS_DOMAIN_GROUPS`, `FACTS_RELEVANCE_ENABLED` (true).
 - **Writing:** `SHORT_MAX_CHARS` (280), `SHORT_MAX_FACTS` (3), `LONG_MIN_CHARS`, `LONG_MAX_CHARS`,
   `THREAD_TWEET_MAX_CHARS`, `THREAD_MAX_TWEETS` (12), `THREAD_MIN_TWEETS` (4),
-  `THREAD_MIN_USED_FACTS` (5, not above `THREAD_MIN_FACTS`; 0 turns a minimum off), `EXAMPLES_DIR`,
-  `EXAMPLES_MAX`.
+  `THREAD_MIN_USED_FACTS` (5, not above `THREAD_MIN_FACTS`; 0 turns a minimum off),
+  `THREAD_MAX_FACTS` (10, at most this many facts are offered to a thread; not below
+  `THREAD_MIN_FACTS`; 0 means no cap), `THREAD_MAX_ATTRIBUTED` (2, extra disputes and legends on top
+  of the cap; 0 turns them off), `EXAMPLES_DIR`, `EXAMPLES_MAX`.
 - **Style filter:** `STYLE_CRITIC_ENABLED`, `STYLE_MAX_REGENERATIONS` (2), the regression ratios.
 - **Bot:** `POST_DEFAULT_FORMAT`, `THREAD_MIN_FACTS` (5), `PIPELINE_TIMEOUT_SECONDS` (600),
   `STATE_MAX_RUNS` (20).
