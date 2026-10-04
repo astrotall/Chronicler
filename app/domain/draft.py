@@ -31,6 +31,7 @@ class LengthIssue(StrEnum):
     TOO_MANY_PARTS = "too_many_parts"
     TOO_SHORT = "too_short"
     TOO_FEW_FACTS = "too_few_facts"
+    TOO_FEW_PARTS = "too_few_parts"
 
 
 class LengthViolation(BaseModel):
@@ -53,6 +54,13 @@ class LongSize(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     min_chars: int = Field(ge=0)
+    min_facts: int = Field(ge=0)
+
+
+class ThreadSize(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    min_tweets: int = Field(ge=0)
     min_facts: int = Field(ge=0)
 
 

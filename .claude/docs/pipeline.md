@@ -450,6 +450,31 @@ job. An empty `FactSet` is a `ValueError` before any call.
   The fact count is `used_fact_ids` as step 4 builds it, so it relies on the ids the model
   reported (plus the disputed facts that code finds); only the character count is checked by
   code against the text.
+- **Thread minimum (HIS-40).** A thread has a floor like `long`: `THREAD_MIN_TWEETS` (4) and
+  `THREAD_MIN_USED_FACTS` (5); `THREAD_MAX_TWEETS` stays a ceiling. 0 turns a minimum off, and
+  with both at 0 the open rule ("2 to 12 tweets") is used. Settings validation: the tweet minimum
+  must not exceed `THREAD_MAX_TWEETS`, the fact minimum must not exceed `THREAD_MIN_FACTS` (the
+  bot's gate), so the start fails on an incompatible pair. The effective minimum is computed per
+  call (`thread_size`, `app/services/generator.py`) from the facts that can be stated: facts =
+  `min(THREAD_MIN_USED_FACTS, assertable)`; tweets = `min(THREAD_MIN_TWEETS, facts)`, or
+  `min(THREAD_MIN_TWEETS, assertable)` when the fact minimum is off. A thread never needs more
+  tweets than there are facts for them. The format rule gives numbers derived from these values:
+  `a thread of {min tweets} to {max} tweets`, "a thread usually has from {min tweets} to
+  {typical max} tweets" (typical max = tweet minimum x `THREAD_TYPICAL_SIZE_MULTIPLIER` (2),
+  never above `THREAD_MAX_TWEETS`; omitted when the tweet minimum is off or the typical maximum
+  equals the minimum), develop at least N of the facts, keep related facts together in one tweet by
+  meaning (not one fact per tweet, style rule 16), the maximum is a ceiling, not a target, do not
+  pad and do not shrink to a summary. The typical range is a hint: the model does not follow it
+  (see `decisions.md`, HIS-40).
+  Under the floor is a length problem and goes through the same retry (`WRITING_LENGTH_RETRIES`,
+  one retry). The thread correction (its own template) states the tweets and the used facts now,
+  the minimums, every other length violation of the draft (a tweet over the limit stays in it),
+  and the ids of the facts that can be stated and are not used yet (ids only), and asks to
+  develop the text without padding. After the retry the `Draft` is returned with
+  `LengthIssue.TOO_FEW_PARTS` (tweets, `part` empty) and/or `LengthIssue.TOO_FEW_FACTS` (used
+  facts, the issue of the long minimum): the post is never lost, the bot warns. The fact count has
+  the same limit as for `long`: it relies on the ids the model reported plus the disputed facts
+  that code finds. `short` and `long` are unchanged.
 - **Short post budget.** The format rule gives a budget derived from the limit instead of "aim
   below it": at most `SHORT_MAX_CHARS // SHORT_SENTENCE_CHARS` sentences (3 by default), each at
   most `SHORT_SENTENCE_CHARS` (80) characters, and the total. A model counts sentences better than
@@ -484,7 +509,10 @@ job. An empty `FactSet` is a `ValueError` before any call.
   such number into a violation that triggers a regeneration (see step 5).
 - An LLM error or an invalid reply is not caught. One INFO line logs the format and counters:
   parts, facts offered to the model, used facts, unknown ids, unverified numbers, length
-  violations, attempts, dropped pieces. Texts are never logged.
+  violations, attempts, dropped pieces. Texts are never logged. Each length retry logs one more
+  INFO line with the cause: format, attempt, parts, used facts and the violations as
+  `issue=actual/limit` (`issue#part=actual/limit` for a tweet), for example
+  `part_too_long#2=328/280,too_many_parts=13/12`. Kinds and numbers only.
 
 Known limits of the number check:
 
@@ -621,6 +649,12 @@ No dependency. Each phrase becomes a regular expression:
    worst the original) with its remaining violations; the bot says how many were rejected.
    The regeneration instruction itself says: fix only the flagged fragments, the rest stays word
    for word, the same length, the same facts.
+   **A thread must not fall below its minimum (HIS-40).** The two ratios do not guarantee it
+   (4 tweets and 5 facts to 3 tweets and 4 facts passes both). So a thread version is also a
+   regression if its tweet count or its used-fact count is below the effective minimum of step 4
+   and below the last accepted version's. A first version that is already below the minimum is not
+   punished twice: an equal or larger version is accepted, a smaller one is rejected. Counted and
+   handled like any regression. Not applied to `short` and `long`.
 7. **The best version goes out:** the fewest violations of the rules in `DANGEROUS_STYLE_RULES`
    (`unsupported_claim`, `unverified_number`, `ambiguous_reference`, `invented_experience`, data in
    `app/config/style.py`), then the fewest violations in total, and on a tie the later one. Its
@@ -642,8 +676,11 @@ costs up to 2 extra writer calls.
   violations.
 - One INFO line per review: format, attempts, chosen attempt, regenerations, whether a
   regeneration failed, the number of rejected regressions, the critic status of each attempt, the number of violations, dangerous ones,
-  counts per rule name, and the dropped, withdrawn and over-limit findings. Texts, excerpts and
-  explanations are never logged.
+  counts per rule name, and the dropped, withdrawn and over-limit findings, then the reasons of
+  the regenerations: `regeneration_triggers` (rule counts of the version regenerated, one group
+  per regeneration, joined by `|`) and `regression_causes` (per rejected regression the kind,
+  `thread_parts`, `thread_facts`, `chars` or `facts`, with `previous>current`; `none` when empty).
+  Texts, excerpts and explanations are never logged.
 
 A rejected regression costs one `write_draft` call and no critic call, and counts in the same
 limit `STYLE_MAX_REGENERATIONS`.
@@ -792,7 +829,7 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `LengthViolation`   | `issue` (`part_too_long` or `too_many_parts`), the 1-based `part` or none, `actual` and `limit`            |
 | `SentenceBudget`    | `max_sentences` and `sentence_chars` of a short post, derived from `SHORT_MAX_CHARS` and `SHORT_SENTENCE_CHARS` |
 | `Revision`          | `instruction` and `previous` (the texts of the previous draft's parts), for "короче" and "ещё вариант"    |
-| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `length_violations` also holds `too_short` and `too_few_facts` for a long post under its minimum. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the user copies |
+| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `length_violations` also holds `too_short` and `too_few_facts` for a long post under its minimum, and `too_few_parts` and `too_few_facts` for a thread under its minimum. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the user copies |
 | `StyleRule`         | The rules a violation names: `dash`, `banned_phrase`, `invented_experience`, `emoji`, `hashtag`, `closing_question`, `length`, `unverified_number` (code) and `cliche`, `triplet`, `filler`, `opinion`, `unsupported_claim`, `ambiguous_reference` (critic; `invented_experience` too) |
 | `Violation`         | `rule`, `source` (`code` or `critic`), `part` (1-based or none), `excerpt` (from the text, none for length), `explanation` in Russian for the user |
 | `StyleReport`       | `violations`, `critic` (`checked`, `disabled`, `failed`), counters of critic findings dropped (excerpt not in the text), withdrawn and over the limit; `passed` is no violations |

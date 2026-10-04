@@ -105,6 +105,7 @@ PART_TOO_LONG_EXPLANATION = "Часть {part}: {actual} знаков при п�
 TOO_MANY_PARTS_EXPLANATION = "{actual} твитов при максимуме {limit}."
 TOO_SHORT_EXPLANATION = "Пост короче минимума: {actual} знаков при минимуме {limit}."
 TOO_FEW_FACTS_EXPLANATION = "В посте {actual} фактов при минимуме {limit}."
+TOO_FEW_PARTS_EXPLANATION = "{actual} твитов при минимуме {limit}."
 REGRESSION_NOTE = (
     "\nThe previous attempt removed too much: keep all the text and all the facts, and change "
     "only the flagged fragments."

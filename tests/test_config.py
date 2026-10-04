@@ -187,6 +187,8 @@ def test_writing_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.style_min_retained_facts_ratio == 0.6
     assert settings.thread_tweet_max_chars == 280
     assert settings.thread_max_tweets == 12
+    assert settings.thread_min_tweets == 4
+    assert settings.thread_min_used_facts == 5
     assert settings.thread_numbering is False
     assert settings.examples_dir == Path("data/examples")
     assert settings.examples_max == 3
@@ -216,6 +218,8 @@ def test_writing_settings_are_read_from_the_environment(monkeypatch: pytest.Monk
         ("LONG_MAX_CHARS", "0"),
         ("LONG_MIN_CHARS", "-1"),
         ("LONG_MIN_USED_FACTS", "-1"),
+        ("THREAD_MIN_TWEETS", "-1"),
+        ("THREAD_MIN_USED_FACTS", "-1"),
         ("STYLE_MIN_RETAINED_CHARS_RATIO", "0"),
         ("STYLE_MIN_RETAINED_CHARS_RATIO", "1.1"),
         ("STYLE_MIN_RETAINED_FACTS_RATIO", "0"),
@@ -246,3 +250,31 @@ def test_the_long_minimum_must_not_exceed_the_long_limit(monkeypatch: pytest.Mon
     assert (
         facts_env(monkeypatch, LONG_MIN_CHARS="2000", LONG_MAX_CHARS="2000").long_min_chars == 2000
     )
+
+
+def test_the_thread_tweet_minimum_must_not_exceed_the_maximum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValidationError, match="THREAD_MIN_TWEETS"):
+        facts_env(monkeypatch, THREAD_MIN_TWEETS="13", THREAD_MAX_TWEETS="12")
+
+    assert (
+        facts_env(monkeypatch, THREAD_MIN_TWEETS="12", THREAD_MAX_TWEETS="12").thread_min_tweets
+        == 12
+    )
+
+
+def test_the_thread_fact_minimum_must_agree_with_the_thread_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValidationError, match="THREAD_MIN_USED_FACTS"):
+        facts_env(monkeypatch, THREAD_MIN_FACTS="4")
+
+    settings = facts_env(monkeypatch, THREAD_MIN_FACTS="4", THREAD_MIN_USED_FACTS="4")
+    assert settings.thread_min_used_facts == 4
+
+
+def test_the_thread_minimums_can_be_turned_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = facts_env(monkeypatch, THREAD_MIN_TWEETS="0", THREAD_MIN_USED_FACTS="0")
+
+    assert (settings.thread_min_tweets, settings.thread_min_used_facts) == (0, 0)

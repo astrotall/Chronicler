@@ -556,6 +556,41 @@ def test_a_too_short_long_post_names_the_size_and_the_minimum() -> None:
     assert "Длина, в посте 3 фактов при минимуме 6." in text
 
 
+def test_a_small_thread_names_the_tweets_and_the_facts_against_the_minimums() -> None:
+    ready = make_ready(
+        post_format=PostFormat.THREAD,
+        texts=["Первый.", "Второй."],
+        length=[
+            LengthViolation(issue=LengthIssue.TOO_FEW_PARTS, actual=2, limit=4),
+            LengthViolation(issue=LengthIssue.TOO_FEW_FACTS, actual=3, limit=5),
+        ],
+    )
+
+    found = warnings(ready)
+
+    assert "Длина, в треде 2 твитов при минимуме 4." in found
+    assert "Длина, использовано фактов 3 при минимуме 5." in found
+
+
+def test_a_thread_warning_carries_only_numbers_and_names() -> None:
+    ready = make_ready(
+        post_format=PostFormat.THREAD,
+        texts=["Секретный текст твита."],
+        length=[LengthViolation(issue=LengthIssue.TOO_FEW_PARTS, actual=1, limit=4)],
+    )
+
+    assert "Секретный" not in "\n".join(warnings(ready))
+
+
+def test_the_long_fact_warning_keeps_its_own_wording() -> None:
+    ready = make_ready(
+        post_format=PostFormat.LONG,
+        length=[LengthViolation(issue=LengthIssue.TOO_FEW_FACTS, actual=3, limit=6)],
+    )
+
+    assert "Длина, в посте 3 фактов при минимуме 6." in warnings(ready)
+
+
 WEAK_URL = "https://m.youtube.com/watch?v=1"
 
 

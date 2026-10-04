@@ -1,7 +1,10 @@
+import logging
+
 import pytest
 from app.domain.draft import PostFormat
 from app.domain.llm import Message
 from app.domain.style import StyleResult, StyleRule
+from app.services.generator import WritingLimits
 from app.services.style_review import StyleLimits, review_style
 
 from llm_helpers import ScriptedLLMClient, as_client
@@ -239,3 +242,208 @@ async def test_the_ratios_come_from_the_limits() -> None:
     )
 
     assert result.regressions_rejected == 1
+
+
+THREAD_FILLER_TWEETS = [
+    "Первый твит. Это решило многое.",
+    "Второй твит.",
+    "Третий твит.",
+    "Четвёртый твит.",
+]
+THREAD_FACTS = ("F1", "F2", "F3", "F4")
+FOUR_TWEETS = ["Один.", "Два.", "Три.", "Четыре."]
+THREE_TWEETS = ["Один.", "Два.", "Три."]
+TWO_TWEETS = ["Один.", "Два."]
+
+
+def thread_limits() -> WritingLimits:
+    return WritingLimits(
+        short_max_chars=280,
+        long_max_chars=25000,
+        thread_tweet_max_chars=280,
+        thread_max_tweets=12,
+        thread_min_tweets=4,
+        thread_min_used_facts=5,
+    )
+
+
+def thread_with(tweets: list[str], *facts: str) -> dict[str, object]:
+    return {"fact_ids": list(facts), "tweets": tweets}
+
+
+async def review_thread(
+    writer: ScriptedLLMClient,
+    critic: ScriptedLLMClient,
+    *,
+    tweets: list[str],
+    used: tuple[str, ...] = THREAD_FACTS,
+    max_regenerations: int = 1,
+) -> StyleResult:
+    return await review_style(
+        as_client(writer),
+        as_client(critic),
+        make_draft(tweets, PostFormat.THREAD, used_fact_ids=used),
+        FACT_SET,
+        thread_limits(),
+        make_style_limits(max_regenerations=max_regenerations),
+    )
+
+
+async def test_a_thread_regenerated_below_the_tweet_minimum_is_rejected_and_never_chosen() -> None:
+    writer = ScriptedLLMClient(
+        thread_with(THREE_TWEETS, *THREAD_FACTS), thread_with(THREE_TWEETS, *THREAD_FACTS)
+    )
+    critic = ScriptedLLMClient(FILLER_FINDING)
+
+    result = await review_thread(writer, critic, tweets=THREAD_FILLER_TWEETS)
+
+    assert result.regressions_rejected == 1
+    assert (result.attempts, result.chosen_attempt) == (1, 1)
+    assert result.draft.texts == THREAD_FILLER_TWEETS
+    assert len(critic.calls) == 1
+
+
+async def test_a_thread_regenerated_below_the_fact_minimum_is_rejected() -> None:
+    writer = ScriptedLLMClient(
+        thread_with(FOUR_TWEETS, "F1", "F2", "F3"), thread_with(FOUR_TWEETS, "F1", "F2", "F3")
+    )
+    critic = ScriptedLLMClient(FILLER_FINDING)
+
+    result = await review_thread(writer, critic, tweets=THREAD_FILLER_TWEETS)
+
+    assert result.regressions_rejected == 1
+    assert result.draft.texts == THREAD_FILLER_TWEETS
+
+
+async def test_the_thread_guard_works_where_the_ratio_thresholds_pass() -> None:
+    critic = ScriptedLLMClient(FILLER_FINDING)
+    long_tweets = [f"{index}" + "а" * 200 for index in range(4)]
+    long_tweets[0] += f" {FILLER}"
+    shrunk = [f"{index}" + "а" * 230 for index in range(3)]
+    writer = ScriptedLLMClient(
+        thread_with(shrunk, *THREAD_FACTS), thread_with(shrunk, *THREAD_FACTS)
+    )
+
+    result = await review_thread(writer, critic, tweets=long_tweets)
+
+    assert result.regressions_rejected == 1
+
+
+async def test_a_thread_that_keeps_the_minimum_is_accepted() -> None:
+    writer = ScriptedLLMClient(thread_with(FOUR_TWEETS, *THREAD_FACTS))
+    critic = ScriptedLLMClient(FILLER_FINDING, NO_FINDINGS)
+
+    result = await review_thread(writer, critic, tweets=THREAD_FILLER_TWEETS)
+
+    assert result.regressions_rejected == 0
+    assert result.draft.texts == FOUR_TWEETS
+    assert REGRESSION_NOTE not in revision_prompt(writer, 0)
+
+
+async def test_a_first_variant_already_below_the_minimum_is_not_punished_twice() -> None:
+    first = ["Первый твит. Это решило многое.", "Второй твит.", "Третий твит."]
+    writer = ScriptedLLMClient(
+        thread_with(THREE_TWEETS, *THREAD_FACTS), thread_with(THREE_TWEETS, *THREAD_FACTS)
+    )
+    critic = ScriptedLLMClient(FILLER_FINDING, NO_FINDINGS)
+
+    result = await review_thread(writer, critic, tweets=first)
+
+    assert result.regressions_rejected == 0
+    assert result.draft.texts == THREE_TWEETS
+
+
+async def test_a_variant_smaller_than_a_first_variant_that_was_already_small_is_rejected() -> None:
+    first = ["Первый твит. Это решило многое.", "Второй твит.", "Третий твит."]
+    writer = ScriptedLLMClient(
+        thread_with(TWO_TWEETS, *THREAD_FACTS), thread_with(TWO_TWEETS, *THREAD_FACTS)
+    )
+    critic = ScriptedLLMClient(FILLER_FINDING)
+
+    result = await review_thread(writer, critic, tweets=first)
+
+    assert result.regressions_rejected == 1
+    assert result.draft.texts == first
+
+
+async def test_a_rejected_thread_regression_adds_the_stronger_instruction_to_the_next_try() -> None:
+    writer = ScriptedLLMClient(
+        thread_with(THREE_TWEETS, *THREAD_FACTS),
+        thread_with(THREE_TWEETS, *THREAD_FACTS),
+        thread_with(FOUR_TWEETS, *THREAD_FACTS),
+    )
+    critic = ScriptedLLMClient(FILLER_FINDING, NO_FINDINGS)
+
+    result = await review_thread(writer, critic, tweets=THREAD_FILLER_TWEETS, max_regenerations=2)
+
+    assert result.regressions_rejected == 1
+    assert result.draft.texts == FOUR_TWEETS
+    assert REGRESSION_NOTE in revision_prompt(writer, 2)
+
+
+async def test_long_and_short_ignore_the_thread_minimum_in_the_guard() -> None:
+    writer = ScriptedLLMClient(single_reply("б" * 900, *FIVE_FACTS))
+    critic = ScriptedLLMClient(FILLER_FINDING, NO_FINDINGS)
+
+    result = await review_style(
+        as_client(writer),
+        as_client(critic),
+        make_draft([WITH_FILLER], PostFormat.LONG, used_fact_ids=FIVE_FACTS),
+        FACT_SET,
+        thread_limits(),
+        make_style_limits(max_regenerations=1),
+    )
+
+    assert result.regressions_rejected == 0
+    assert result.draft.texts == ["б" * 900]
+
+
+def style_line(caplog: pytest.LogCaptureFixture) -> str:
+    lines = [record.getMessage() for record in caplog.records if "style reviewed" in record.message]
+    assert len(lines) == 1
+    return lines[0]
+
+
+async def test_the_style_line_logs_the_triggers_and_the_regression_causes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    writer = ScriptedLLMClient(
+        thread_with(THREE_TWEETS, *THREAD_FACTS),
+        thread_with(THREE_TWEETS, *THREAD_FACTS),
+        thread_with(FOUR_TWEETS, *THREAD_FACTS),
+    )
+    critic = ScriptedLLMClient(FILLER_FINDING, NO_FINDINGS)
+
+    with caplog.at_level(logging.INFO, logger="app.services.style_review"):
+        await review_thread(writer, critic, tweets=THREAD_FILLER_TWEETS, max_regenerations=2)
+
+    line = style_line(caplog)
+    assert "regeneration_triggers=filler=1|filler=1" in line
+    assert f"regression_causes=thread_parts={len(THREAD_FILLER_TWEETS)}>3" in line
+    assert FILLER not in line
+
+
+async def test_the_style_line_logs_none_when_nothing_was_regenerated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    writer = ScriptedLLMClient()
+    critic = ScriptedLLMClient(NO_FINDINGS)
+
+    with caplog.at_level(logging.INFO, logger="app.services.style_review"):
+        await review_thread(writer, critic, tweets=THREAD_FILLER_TWEETS)
+
+    line = style_line(caplog)
+    assert "regeneration_triggers=none" in line
+    assert "regression_causes=none" in line
+
+
+async def test_a_fact_loss_is_logged_with_both_counts(caplog: pytest.LogCaptureFixture) -> None:
+    writer = ScriptedLLMClient(
+        thread_with(FOUR_TWEETS, "F1", "F2", "F3"), thread_with(FOUR_TWEETS, "F1", "F2", "F3")
+    )
+    critic = ScriptedLLMClient(FILLER_FINDING)
+
+    with caplog.at_level(logging.INFO, logger="app.services.style_review"):
+        await review_thread(writer, critic, tweets=THREAD_FILLER_TWEETS)
+
+    assert f"thread_facts={len(THREAD_FACTS)}>3" in style_line(caplog)

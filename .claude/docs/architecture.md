@@ -294,7 +294,7 @@ full behaviour is in [pipeline.md](pipeline.md), step 4.
 | `app/prompts/style_rules.py`     | `render_style_rules`: the Russian rules block, shared with the critic prompt of step 5 |
 | `app/config/style.py`            | Style rule data: banned phrases, forbidden dashes, invented-experience phrases, cautious wordings, and the data the style filter matches with (see "Style filter") |
 | `app/services/disputes.py`       | `with_disputed_facts`: adds the disputed and attributed facts a draft states to `used_fact_ids` |
-| `app/domain/draft.py`            | `PostFormat`, `DraftPart`, `LengthIssue`, `LengthViolation`, `LongSize`, `Revision`, `Draft` |
+| `app/domain/draft.py`            | `PostFormat`, `DraftPart`, `LengthIssue`, `LengthViolation`, `LongSize`, `ThreadSize`, `Revision`, `Draft` |
 
 - One `complete_json` call (`WRITING_*_MAX_TOKENS` per format), and one more only when a length
   limit is broken. The second call carries the first reply as an `assistant` turn and the list of

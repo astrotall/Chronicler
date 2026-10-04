@@ -51,6 +51,8 @@ from app.config.constants import (
     TAVILY_MAX_RESULTS_LIMIT,
     THREAD_DEFAULT_MAX_TWEETS,
     THREAD_DEFAULT_MIN_FACTS,
+    THREAD_DEFAULT_MIN_TWEETS,
+    THREAD_DEFAULT_MIN_USED_FACTS,
     THREAD_MIN_TWEETS,
     THREAD_NUMBERING_TEMPLATE,
     THREAD_TWEET_DEFAULT_MAX_CHARS,
@@ -157,6 +159,8 @@ class Settings(BaseSettings):
     long_min_used_facts: int = Field(default=LONG_DEFAULT_MIN_USED_FACTS, ge=0)
     thread_tweet_max_chars: int = Field(default=THREAD_TWEET_DEFAULT_MAX_CHARS, ge=1)
     thread_max_tweets: int = Field(default=THREAD_DEFAULT_MAX_TWEETS, ge=THREAD_MIN_TWEETS)
+    thread_min_tweets: int = Field(default=THREAD_DEFAULT_MIN_TWEETS, ge=0)
+    thread_min_used_facts: int = Field(default=THREAD_DEFAULT_MIN_USED_FACTS, ge=0)
     thread_numbering: bool = False
 
     examples_dir: Path = Path(EXAMPLES_DEFAULT_DIR)
@@ -223,6 +227,18 @@ class Settings(BaseSettings):
     def require_long_range(self) -> Self:
         if self.long_min_chars > self.long_max_chars:
             raise ValueError("LONG_MIN_CHARS must not exceed LONG_MAX_CHARS")
+        return self
+
+    @model_validator(mode="after")
+    def require_thread_range(self) -> Self:
+        if self.thread_min_tweets > self.thread_max_tweets:
+            raise ValueError("THREAD_MIN_TWEETS must not exceed THREAD_MAX_TWEETS")
+        return self
+
+    @model_validator(mode="after")
+    def require_thread_facts_agree(self) -> Self:
+        if self.thread_min_used_facts > self.thread_min_facts:
+            raise ValueError("THREAD_MIN_USED_FACTS must not exceed THREAD_MIN_FACTS")
         return self
 
     @model_validator(mode="after")

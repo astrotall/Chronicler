@@ -299,6 +299,144 @@ the live run shows only that the new prompt does not collapse; the two mechanism
 unit tests. The posts read as the facts retold one after another, grouped into paragraphs, not as
 a narrative.
 
+### Thread minimum size (HIS-40)
+
+Live runs of HIS-27: the thread on the Kulikovo battle was 2 tweets written from 4 facts, while the
+writer was offered 24. The bot already refused a thread below `THREAD_MIN_FACTS` (5) assertable
+facts, but nobody checked the result, and the thread format had no floor (`long` got one in HIS-30).
+
+Decided:
+
+- **A floor for `thread`:** `THREAD_MIN_TWEETS` 4 (a hook, two steps, an ending: two or three
+  tweets are a short post cut in pieces) and `THREAD_MIN_USED_FACTS` 5. 5 is `THREAD_MIN_FACTS`:
+  if the bot lets a thread through on 5 facts, the thread has to use them. 5 facts in 4 tweets is
+  one or two facts per tweet, so the floor does not push the model to "one fact per tweet" (style
+  rule 16); the prompt says to keep related facts together by meaning. `THREAD_MAX_TWEETS` (12)
+  stays a ceiling and the prompt says it is not a target.
+- **Settings validation fails the start:** the tweet minimum above `THREAD_MAX_TWEETS`, or the fact
+  minimum above `THREAD_MIN_FACTS`, is a configuration error (the owner chose an error over a
+  silent adjustment). 0 turns a minimum off. The existing constant `THREAD_MIN_TWEETS` (2) is the
+  structural floor of the schema and was not renamed; the default is `THREAD_DEFAULT_MIN_TWEETS`.
+- **The effective minimum is capped by the facts on offer:** facts = `min(setting, assertable)`,
+  tweets = `min(setting, facts)` (`min(setting, assertable)` when the fact minimum is off).
+  Without the second cap a fact minimum of 0 would switch the tweet minimum off through the cap.
+- **Under the floor is a length problem:** the existing retry, a thread-specific correction, then a
+  `Draft` with `LengthIssue.TOO_FEW_PARTS` (tweets) and/or the existing `TOO_FEW_FACTS`. The facts
+  issue is reused because it means "fewer used facts than the minimum" for either format; the
+  bot words it by the format. The correction also carries the other length violations: a thread
+  can have a tweet over the limit and too few tweets at once.
+- **A guard in the style loop:** the 0.6 ratios of HIS-30 let a thread of 4 tweets and 5 facts fall
+  to 3 and 4, so a separate check was added. A version is a regression if it is below the
+  effective minimum in tweets or in used facts and below the last accepted version in the same
+  measure. The owner decided that a first version already under the minimum is guarded too: a
+  smaller version (3 tweets to 2) is rejected, an equal one is accepted, so the first version is
+  not punished twice.
+- **Known limits:** the fact count relies on the ids the model reports (as for `long`); the
+  minimum says nothing about whether the thread reads as a story, only how large it is; a
+  rejected regression spends one regeneration of the budget.
+
+Live check (`tests/test_thread_live.py`, DeepSeek, thread format, the saved fact sets
+`his8_kulikovo` (26 facts, 20 to state) and `his8_soviet_day_1930s` (24 facts, 21 to state), real
+sources, 3 samples each, the whole write and style loop, empty examples). The effective minimum was
+4 tweets and 5 facts. 44 calls counted at the client level (26 writer, 18 critic; the HTTP and JSON
+retries inside the client are not counted).
+
+| | Kulikovo | Soviet 1930s |
+| --- | --- | --- |
+| Tweets of the 3 samples | 11, 9, 12 | 12, 12, 10 |
+| Used facts | 19, 15, 15 | 24, 22, 24 |
+| Facts per tweet | 1.73, 1.67, 1.25 | 2.0, 1.83, 2.4 |
+| Length violations left | 0 | 0 |
+| Regressions rejected | 0 | 0 |
+| Style regenerations | 2, 2, 2 | 2, 2, 2 |
+
+- **No sample came near the floor, and the floor itself was not exercised:** every thread had 9 to
+  12 tweets and 15 to 24 facts, against 2 tweets and 4 facts in the HIS-27 run. The minimum retry
+  and the thread regression guard were not triggered live (no rejected regression); they are
+  covered by unit tests only. A length retry of the first draft happened in 4 of 6 samples; the
+  run did not record its cause (the second run below does).
+- **The new rule overshoots:** the prompt changed a 2-tweet thread into threads at or near the
+  `THREAD_MAX_TWEETS` ceiling, in spite of "the maximum is a ceiling, not a target". Soviet
+  samples 1 and 2 are exactly 12 tweets. Not changed in this ticket; if the owner wants
+  shorter threads, the minimum and the prompt wording are the two knobs.
+- **Reading:** it is not "one fact per tweet, each with a closing line": 1.25 to 2.4 facts per
+  tweet, tweets of 66 to 280 characters, several tweets carry two or three facts. But it reads as
+  the facts retold one after another, not as a story with a line. The Kulikovo sample runs in the
+  order of the events, with a few weak tweets at the end (the first white-stone Kremlin in tweet
+  11 is off the topic). The Soviet samples jump between working hours, a congress, architecture,
+  housing and leisure with no connection between the tweets.
+- **Connectors the facts do not state:** the critic caught some and the loop could not remove them
+  within 2 regenerations: «Тот же график привёл к росту брака» (a cause), «Карточную систему
+  отменят уже в 1935» (a forward reference with a word added). The Kulikovo sample read in full
+  has «и это решило исход битвы» (a consequence no fact states) that the critic did not flag.
+  Remaining style violations per sample: 0 to 5, mostly `filler`, `unsupported_claim`, `triplet`.
+
+**Second round: a typical range and the cause of a retry.** Two changes after the first live check.
+
+- **A typical size in the prompt**, like `usually 1200 to 2400` for `long`: "A thread usually has
+  from {min tweets} to {typical max} tweets", where the typical maximum is the effective tweet
+  minimum times `THREAD_TYPICAL_SIZE_MULTIPLIER` (2; 4 to 8 by default), never above
+  `THREAD_MAX_TWEETS`. The ceiling stays a hard limit and "a ceiling, not a target". The sentence
+  is left out when the tweet minimum is off (0) or the typical maximum would equal the minimum
+  (a ceiling at the minimum); with both minimums off the old open rule is unchanged.
+- **The cause of a retry is logged (INFO, kinds and numbers only, never a text).** The length
+  retry of `write_draft` writes `length retry format attempt parts used_facts violations`, where
+  `violations` is `issue=actual/limit` for a thread-wide issue and `issue#part=actual/limit` for a
+  tweet (`part_too_long#2=328/280`, `too_many_parts=13/12`, `too_few_parts=2/4`). The style line
+  adds `regeneration_triggers` (the rule counts of the version that was regenerated, one group per
+  regeneration, separated by `|`) and `regression_causes` (per rejected regression: `thread_parts`,
+  `thread_facts`, `chars` or `facts` with `previous>current`, several joined by `+`; `none` when
+  empty).
+
+Live check, same sets, same settings, DeepSeek, 3 samples each, empty examples, no Tavily. 44 calls
+counted at the client level (28 writer, 16 critic). The saved report is `data/comparisons/
+his40_*.json` (local, not tracked), now with the log lines of each sample.
+
+| | Kulikovo | Soviet 1930s |
+| --- | --- | --- |
+| Tweets (before: 11, 9, 12 / 12, 12, 10) | 11, 10, 9 | 13, 13, 11 |
+| Used facts | 18, 18, 17 | 23, 23, 23 |
+| Facts per tweet | 1.64, 1.8, 1.89 | 1.77, 1.77, 2.09 |
+| First draft retried for | long tweet (3 of 3) | long tweet + 13 of 12 tweets, long tweet + 13 of 12, none |
+| Style regenerations | 2, 0, 2 | 2, 2, 2 |
+| Regressions rejected | 0 | 0 |
+| Left in the chosen draft | `length` (a 281-character tweet) and `unsupported_claim`; none; `ambiguous_reference` and `unsupported_claim` | `length` (13 of 12) and 2 `unsupported_claim`; `length` (13 of 12); `filler` and 3 `unsupported_claim` |
+
+- **The typical range did not work.** 0 of 6 threads are in 4 to 8 tweets (9 to 13), as before.
+  Nothing sits exactly on the ceiling of 12 any more, but two threads are one over it (13 of 12:
+  the retry could not bring them down and the draft goes out with `too_many_parts`), so the
+  ceiling is crossed, not respected. The prompt was checked: the sentence is in it ("usually from 4
+  to 8 tweets"), the model does not follow it.
+- **The retry was never about the minimum.** 5 of 6 first drafts were retried: all 5 for a tweet
+  over 280 characters (from 281 to 423), 2 of them also for 13 tweets of 12. The 7 retries inside
+  the style regenerations were the same two kinds (5 for a long tweet, 2 for 15 and 13 tweets). Not once too few tweets or
+  too few facts. So the model packs two or three facts into a tweet, overflows 280, and on the
+  retry splits the tweet, which adds tweets; on 13 of 12 it merges, and it overflows again. A
+  version with 11 tweets averages 170 characters a tweet, far from the 280.
+- **Why it stays large:** the model uses nearly all the facts on offer (17 or 18 ids of the 20 to
+  state for Kulikovo, 23 of 21 for Soviet; the count includes the disputed facts a draft mentions), not the 5 asked as a floor.
+  At about 1.8 facts a tweet that makes 10 to 13 tweets. The tweet minimum and the typical range
+  limit it from below and by a hint; nothing limits the number of facts used. The first run said
+  that "shorter threads" depend on the minimum and the wording; the second run shows they do not.
+- **Reading:** unchanged. The Kulikovo thread reads as a list of facts in a loose order: the
+  disputed arrival and the foggy morning (tweets 8 and 9) come after the battle (tweets 6 and 7),
+  the last tweet is about the Kremlin. The Soviet thread is a catalogue that jumps from working
+  hours to a congress of 1929, a decree of 1940, architecture, housing and the cinema; its last
+  tweet is the 30 February remark. The facts were not lost (17 to 23 used), the thread is not a
+  story.
+- **Options, none applied (the owner decides):** (1) cap the number of facts a thread is offered,
+  as `short` does (`select_short_facts`), for instance the first 10 to 12 by relevance, so a
+  thread is 5 to 8 tweets by construction; this attacks the cause. (2) A typical number of facts
+  in the prompt, "usually 8 to 12 of the facts", beside the typical tweets; cheap, but the same
+  kind of hint the model just ignored. (3) Lower `THREAD_MAX_TWEETS` to 8 or 10; it would only
+  turn more drafts into `too_many_parts` retries and flagged drafts, since the model does not aim
+  below the ceiling. (4) Accept 9 to 13 for a 24-fact set and move the minimum guard only.
+  Option 1 is the one that removes the cause; it changes the offered facts of a thread and needs
+  its own ticket.
+- **Found outside the task:** the style loop can choose a draft that crosses the ceiling or a tweet
+  limit by one (13 of 12, 281 of 280), because `length` is a report-only rule and a chosen draft
+  with `length_violations` goes out with a warning. Not changed here.
+
 ### Bot delivery
 
 HIS-8 connected the steps in Telegram (see [pipeline.md](pipeline.md), step 6).
@@ -855,6 +993,8 @@ Decided as config values (HIS-6), defaults to be revisited after real drafts:
 - Numbering (`1/ `) is off by default (`THREAD_NUMBERING`). Code adds it after the reply, the
   model is given a tweet limit reduced by the widest prefix, and the full length is checked.
 - A thread needs `THREAD_MIN_FACTS` (5) assertable facts, decided in HIS-8 (see "Bot delivery").
+- Thread minimum: `THREAD_MIN_TWEETS` 4 and `THREAD_MIN_USED_FACTS` 5, a floor with one retry
+  (HIS-40, see "Thread minimum size").
 
 ### Few-shot selection
 

@@ -15,6 +15,7 @@ from app.prompts.style_critique import (
     INVENTED_EXPERIENCE_EXPLANATION,
     PART_TOO_LONG_EXPLANATION,
     TOO_FEW_FACTS_EXPLANATION,
+    TOO_FEW_PARTS_EXPLANATION,
     TOO_MANY_PARTS_EXPLANATION,
     TOO_SHORT_EXPLANATION,
     UNVERIFIED_NUMBER_EXPLANATION,
@@ -223,6 +224,8 @@ def length_explanation(violation: LengthViolation) -> str:
             return TOO_SHORT_EXPLANATION.format(actual=violation.actual, limit=violation.limit)
         case LengthIssue.TOO_FEW_FACTS:
             return TOO_FEW_FACTS_EXPLANATION.format(actual=violation.actual, limit=violation.limit)
+        case LengthIssue.TOO_FEW_PARTS:
+            return TOO_FEW_PARTS_EXPLANATION.format(actual=violation.actual, limit=violation.limit)
 
 
 def check_length(draft: Draft) -> list[Violation]:
