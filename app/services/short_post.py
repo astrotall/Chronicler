@@ -4,7 +4,7 @@ from itertools import pairwise
 from app.config.constants import SENTENCE_ABBREVIATIONS
 from app.domain.draft import SentenceBudget
 from app.domain.fact import Fact, FactSet, FactStatus
-from app.prompts.writing import disputed_ids
+from app.prompts.writing import assertable_facts, disputed_ids
 from app.services.quote_check import extract_numbers
 
 SENTENCE_BOUNDARY = re.compile(r"[.!?…]+[\"'»”)]*(?=\s+[«\"„(]?[0-9A-ZА-ЯЁ])")
@@ -45,9 +45,7 @@ def status_rank(fact: Fact) -> int:
 
 def select_short_facts(fact_set: FactSet, max_facts: int) -> FactSet:
     disputed = disputed_ids(fact_set)
-    assertable = sorted(
-        (fact for fact in fact_set.facts if fact.id not in disputed), key=status_rank
-    )
+    assertable = sorted(assertable_facts(fact_set), key=status_rank)
     chosen = {fact.id for fact in assertable[:max_facts]}
     units = dispute_units(fact_set, disputed)
     for unit in units:

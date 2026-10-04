@@ -31,7 +31,7 @@ from app.domain.llm import Message, Role
 from app.llm.client import LLMClient
 from app.prompts.writing import (
     NO_LONG_SIZE,
-    disputed_ids,
+    assertable_facts,
     render_expand_correction,
     render_length_correction,
     render_short_correction,
@@ -198,11 +198,9 @@ def check_length(
 def long_size(post_format: PostFormat, limits: WritingLimits, prompt_facts: FactSet) -> LongSize:
     if post_format is not PostFormat.LONG:
         return NO_LONG_SIZE
-    disputed = disputed_ids(prompt_facts)
-    assertable = sum(1 for fact in prompt_facts.facts if fact.id not in disputed)
     return LongSize(
         min_chars=limits.long_min_chars,
-        min_facts=min(limits.long_min_used_facts, assertable),
+        min_facts=min(limits.long_min_used_facts, len(assertable_facts(prompt_facts))),
     )
 
 
@@ -227,12 +225,7 @@ def check_size(
 
 
 def unused_fact_ids(prompt_facts: FactSet, used_fact_ids: Sequence[str]) -> list[str]:
-    disputed = disputed_ids(prompt_facts)
-    return [
-        fact.id
-        for fact in prompt_facts.facts
-        if fact.id not in disputed and fact.id not in used_fact_ids
-    ]
+    return [fact.id for fact in assertable_facts(prompt_facts) if fact.id not in used_fact_ids]
 
 
 def text_violations(

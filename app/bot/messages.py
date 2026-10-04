@@ -1,5 +1,5 @@
 from app.domain.draft import PostFormat
-from app.domain.fact import FactStatus
+from app.domain.fact import ClaimStance, FactStatus
 from app.domain.pipeline import FailureKind, PipelineStage, PostAction
 from app.domain.style import StyleRule
 
@@ -64,8 +64,8 @@ NO_SOURCES_TEXT = (
 RESEARCH_FAILED_TEMPLATE = "Источники не ответили: {failures}. Попробуй позже."
 NOTHING_FOUND_TEXT = "Источники ничего не нашли по этой теме. Попробуй сформулировать иначе."
 NOT_ENOUGH_FACTS_TEMPLATE = (
-    "Фактов мало для поста: утверждаемых {assertable}, спорных {disputed}, нужно не меньше "
-    "{required} утверждаемых. Пост не пишу."
+    "Фактов мало для поста: утверждаемых {assertable}, спорных {disputed}, версий и "
+    "опровергнутых {attributed}, нужно не меньше {required} утверждаемых. Пост не пишу."
 )
 THREAD_UNAVAILABLE_TEMPLATE = (
     "Для треда нужно не меньше {required} утверждаемых фактов, есть {assertable}. Тред не делаю."
@@ -101,12 +101,24 @@ STATUS_LABELS: dict[FactStatus, str] = {
     FactStatus.DISPUTED: "СПОРНО",
 }
 DISPUTED_STATUS_LABEL = STATUS_LABELS[FactStatus.DISPUTED]
+STANCE_LABELS: dict[ClaimStance, str] = {
+    ClaimStance.CLAIMED: "версия",
+    ClaimStance.REBUTTED: "опровергнуто",
+}
+STANCE_LABEL_TEMPLATE = "{status} · {stance}"
+REBUTTED_BY_TEMPLATE = "Опровергается: {ids}"
+REBUTTED_WITHOUT_REBUTTAL_LINE = "Опровергается в источнике, опровержение не прошло проверку"
+REBUTS_TEMPLATE = "Опровергает: {ids}"
 
 WARNINGS_HEADER = "Предупреждения:"
 WARNING_LINE_TEMPLATE = "- {text}"
 WEAK_FACTS_TEMPLATE = (
     "{weak} из {total} фактов поста опираются только на слабые источники (они помечены в "
     "списке фактов). Проверь их перед публикацией."
+)
+ATTRIBUTED_USED_TEMPLATE = (
+    "В посте есть версии или опровергнутые утверждения ({ids}): проверь, что они поданы "
+    "с оговоркой, а не как факт."
 )
 UNVERIFIED_NUMBERS_TEMPLATE = "Числа, которых нет в фактах: {numbers}. Проверь их или убери."
 NUMBER_SEPARATOR = ", "

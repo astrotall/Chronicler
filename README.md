@@ -18,7 +18,10 @@ verifies the links in between.
    the snippets. Code checks every quote really occurs in its snippet and every number of a fact
    occurs in its quotes; what fails is dropped. Code marks a fact `confirmed` (2+ independent,
    not weak domains) or `single`, a second model pass finds contradictions, and those facts become
-   `disputed`. Too few facts is a result shown to the author, not a guess.
+   `disputed`. A claim a source gives as a legend, a version or a common belief is `claimed`, one it
+   rebuts is `rebutted` with its rebuttal as a separate fact; code checks that the attribution is
+   visible next to the quote. Such claims are never confirmed and never stated as fact. Too few
+   facts is a result shown to the author, not a guess.
 4. **Write.** The model writes a short post, a long post or a thread strictly from the facts; the
    topic only frames the post, and the post adds no conclusion or claim of importance the facts
    do not state. Disputed facts are shown to the model apart and written cautiously. Code checks
@@ -114,11 +117,13 @@ cancelled with a message.
    over the limit, style violations the filter could not remove (rule, fragment, explanation), the
    critic did not check the text, a regeneration failed and the best version is shown, the end of
    the post was cut, a thread became a short post because there were too few facts, or more than half
-   of the facts in the post stand on weak sources only.
+   of the facts in the post stand on weak sources only, or the post uses a version or a rebutted
+   claim.
 3. The facts: each with its id, its status and links to its sources. "подтверждён" means two or
    more independent domains that are not weak, "один источник" one domain or only weak ones, a
    link marked "слабый" is a source from `FACTS_WEAK_DOMAINS`, **СПОРНО** that the sources contradict
-   each other, with the reason. The first answer lists the facts used in the post and the rest
+   each other, with the reason. "версия" marks a claim the source attributes to others, "опровергнуто"
+   one the source rebuts, with a link to the rebutting fact. The first answer lists the facts used in the post and the rest
    separately, plus the sources that did not answer, if any.
 
 **Buttons** under the post never search again; they rewrite from the same facts, and every new

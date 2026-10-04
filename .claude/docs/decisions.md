@@ -41,6 +41,15 @@ closed. A decision on an open question is recorded here in the same change that 
 | A per-domain cap of 6 of 20, yielding to the larger of the fact and thread minimums | One archive page gave 12 of 20 facts. The floor keeps the cap from turning a thread into a short post |
 | A fact is charged to its least loaded non-weak domain | "First non-weak domain" would push out a confirmed fact because Wikipedia, usually the first support, is full |
 | Domain outside groups is the last two host labels | No public suffix list without a new dependency. Merging `x.co.uk` and `y.co.uk` errs towards `single`; the full host would err towards a false `confirmed` |
+| The stance of a claim is a field of the fact (`asserted`, `claimed`, `rebutted`), with the attribution also in its text | HIS-32. Code and every later step read the field; the text alone cannot be checked. See "Stance of a claim" below |
+| An unknown stance drops the fact; a missing one is `asserted` | Reading an unknown value as `asserted` is the bug itself, as `claimed` it trusts an unchecked attribution. Missing is the pre-HIS-32 behaviour and avoids a retry of the whole extraction |
+| A `claimed` or `rebutted` fact without a marker next to its quote is lowered to `asserted` | The author's decision. The check stops the model from calling a fact a myth from its own knowledge; the list of markers is broad, and live runs list every lowering |
+| A rebuttal is linked by `rebutted_by`, not merged into a `Dispute` | A `Dispute` would make the true rebuttal "СПОРНО" and tell the writer "sources disagree" when the same source says the claim is a myth. The author's decision |
+| Strong markers raise an asserted fact to `claimed` by code; weak markers only confirm the model's stance | HIS-32 round 2, the author's decision: the duel of Peresvet stayed asserted when the model merged an attributed quote with a plain one. See "Stance of a claim" below |
+| A `rebutted` fact whose quote sentences open with a rebuttal opener is the rebuttal and becomes `asserted` | The model swapped the claim and its rebuttal live («Задонщина»). The author's decision |
+| `stance` is written only for claimed and rebutted facts | Output tokens. A missing stance already reads as `asserted` |
+| `FACT_EXTRACTION_MAX_TOKENS` 12000 | The worst live reply was 7987 of 8000; 12000 leaves 50% over it. DeepSeek allows up to 384K output for `deepseek-flash` |
+| Attributed claims are kept beyond the limit, never `confirmed`, never assertable | Like disputed facts: the author sees them, they never count towards a minimum, and a short post never gets one |
 | Snippets are shown to the model as `S1`, `S2`... | A 16-character hash is easy to garble. An unknown label drops the support item, nothing is guessed |
 | Fact text in Russian, quote in the snippet's language | The post is Russian; a translated quote could not be checked. The translation itself is guarded by the number check |
 | Numbers of a fact must occur in its quotes | Step 4 checks the post's numbers against the fact text, so the fact text must be bound to the source too |
@@ -385,6 +394,193 @@ on the stored facts. One run per topic, noise-level evidence.
   warning did not fire in either run; it is covered by the tests only.
 - **Not decided here.** Weak facts still count as assertable and towards the minimums. A post can be
   written from weak facts only; the mark and the warning are the only signal.
+
+### Stance of a claim (HIS-32)
+
+Found in a manual long run: «В СССР в 1930 и 1931 годах существовало 30 февраля» reached the post as
+a fact, and again in a thread after HIS-28. The source gives it as what many sources claim and then
+rebuts it; the quote check passed because the quote was verbatim. The same class: legends («по
+преданию»), versions («по мнению некоторых историков»), what others claim. The rules are in
+[pipeline.md](pipeline.md), step 3, "Stance".
+
+- **The author's decisions:** a field and not text only; lowering to `asserted` without a marker,
+  with a counter; `rebutted_by` instead of a `Dispute`; the labels "версия" and "опровергнуто".
+- **Decided by the implementer:** an unknown stance drops the fact; the context is the quote's
+  sentence and one neighbour on each side, inside one Tavily chunk and one line; a verified rebuttal
+  makes its claim `rebutted` whatever stance the model wrote; a rebutted claim stays out of the
+  contradiction pass; attributed claims are kept beyond the limit with no cap of their own, and a
+  rebuttal cut by the limit comes back with its claim; the bot warns when a post uses one.
+
+Live check, DeepSeek, Wikipedia ru and en, Tavily `basic`. "Before" ran on the code before any
+change, then the research was reused, so "after" spent no Tavily credits. One extraction per case,
+noise-level evidence.
+
+| | 30 февраля (one query) | Soviet daily life 1930s | Kulikovo, run 1 / run 2 |
+| --- | --- | --- | --- |
+| Snippets | 6 | 34 | 27 |
+| Before: the myth | a plain fact, `disputed` with «30 февраля в нём не было»; a second fact asserted with «якобы» in its text | n/a | duel and «Сказание» facts plain, `disputed` |
+| After: `claimed` / `rebutted` | 3 / 0 | 0 / 0 | 0 / 0, then 2 / 1 |
+| After: lowered, unknown | 0, 0 | 1, 0 | 0, 0, then 1, 0 |
+| Extraction output tokens (of 8000) | 4209 before, 2317 after | 4030 before, **7987 after** | 5179 before, 5064, then **6370** |
+
+- **30 февраля.** After: «По распространённому утверждению, в СССР в 1930 и 1931 годах якобы
+  существовало 30 февраля» is `claimed` (marker «якобы» in its own sentence), so it is in the
+  attributed block and not among the facts to state. The model did not use the nested rebuttal: the
+  coinciding calendars and «30 февраля в нём не было» came as separate asserted facts, not linked. The
+  error of the manual run (the myth as an asserted fact) did not reproduce "before" either: the myth
+  was extracted as a plain fact but the contradiction pass made it `disputed`.
+- **Attributed facts and their markers, after.** 30 февраля: the myth («якобы»); «Некоторые издания
+  считают ... в 3328 году ... 367 дней» («считается»); «Реформу не удалось осуществить, утверждает
+  Асташкин» («утверждается», a historian quoted by tass.ru, borderline: an expert opinion rather
+  than a version). Kulikovo run 2: «Согласно «Сказанию о Мамаевом побоище» ... победа осталась за
+  Пересветом» («сказание»); «Главной причиной похода ... летописи называют ...» («летопись»); «Однако
+  судя по тексту «Задонщины» ... Пересвет был жив» `rebutted`, with the «Сказание» version as its
+  rebuttal: the roles are swapped.
+- **Lowered to `asserted`:** Stakhanov's «31 августа» record (marked `claimed`, the source states it
+  plainly: a correct lowering); «по оценкам разных свидетелей, около 80 тысяч войска» (an attribution
+  the marker list does not hold, a wrong lowering).
+- **False positives** (a fact the source states plainly that became `claimed`): none in the four
+  extractions. The Astashkin line is the closest.
+- **Not achieved: the duel of Peresvet and Chelubey stayed `asserted`, and `confirmed`, in both
+  Kulikovo runs.** A Wikipedia page attributes it to «Сказание о Мамаевом побоище» in the same
+  sentence as the quote, imdvor.ru states it plainly, and the model merged the two into one asserted
+  fact against rule 8 of the prompt. The run 1 thread states the duel as fact.
+- **Output tokens.** The stance fields are about 5% of a reply and the rebuttals about 1% (measured
+  on Kulikovo run 2: 856 and 213 of 17 940 characters). The Soviet reply hit 99.8% of the limit
+  because the model returned 87 facts against the 40 asked for (38 before), not because of the
+  fields. Kulikovo run 2 is 80% with 43 facts.
+
+#### Round 2: the stance of each support item, the roles, the token budget
+
+The author accepted round 1 in part and asked for three fixes in the same branch, by code where
+possible.
+
+- **Strong and weak markers.** Strong: what names a legend, a tradition, a myth or a rumour, and the
+  words that disown a claim («предание», «по преданию», «согласно преданию/легенде/сказанию»,
+  «легенда», «сказание», «миф», «якобы», «будто бы», «по слухам»; «legend has it», «according to
+  legend/tradition», «tradition has it», «allegedly», «supposedly», «it is said», «is said to»,
+  «apocryphal», whole «legend» and «myth»). Weak: a reported view or a named source, which is
+  normal for a sound historical fact: «считается», «утверждается», «по мнению», «по одной из версий»,
+  «многие источники», «указывается», «летопись», «хроника», «согласно житию», «according to»,
+  «reportedly». Chronicles are weak on the author's instruction: a fact «согласно летописи» is an
+  ordinary sourced fact. Left out on purpose: bare «tradition» and «legendary» (an «Orthodox
+  tradition», a «legendary general» are plain facts), and the adjectives «легендарный» and
+  «мифический»; the forms of «легенда» and «миф» match whole for this reason. «по оценкам» is in
+  neither list (the author's decision): estimates with their attribution stay `asserted`.
+- **The raise by code.** For every support item of an asserted fact, a strong marker in the quote's
+  sentence or a neighbour makes the fact `claimed` and `single`. Weak markers never raise. Not
+  raised: a support item whose own sentence opens with a rebuttal opener and has no strong marker,
+  because that is the rebuttal next to a legend. The rebuttal of a rebutted fact is checked too, so
+  a swapped pair ends with the real claim `claimed`.
+- **The text is not rewritten.** A raised fact can read as a plain statement. The attribution in
+  the post depends on the attributed block of the writer and on the critic. Rewriting a fact text in
+  code would produce Russian no model checked, and the number check of step 3 already ran on it.
+- **Swapped roles.** A `rebutted` fact whose quotes all sit in sentences opening with «однако», «на
+  самом деле», «в действительности», «however», «in fact» or «actually», with no strong marker in
+  them, becomes `asserted` and loses its link. "All" rather than "any", so a real claim is not
+  turned into a fact by one odd quote.
+- **Token budget.** `stance` is left out for asserted facts, and the prompt states the bound of 40
+  candidates at its start and at its end. DeepSeek documents `max_tokens` from 1 to 384K (393 216)
+  for `deepseek-flash` ([Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/),
+  [Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/); read through search
+  excerpts, the page itself could not be fetched from this environment), so the limit was raised
+  rather than the candidates cut: 7987 x 1.5 = 11 981, rounded to 12000. The cut of candidates by
+  code is unchanged. The live calls of round 2 with `max_tokens` 12000 were accepted. The same
+  constant applies to Anthropic when the step is switched there; its models allow more output.
+
+Live check, round 2, the recorded snippets of round 1, no Tavily credits, 15 DeepSeek calls (3
+extractions of 2 calls, a Kulikovo thread with 6 writer and 3 critic calls). One run per case.
+
+| | 30 февраля | Soviet daily life 1930s | Kulikovo |
+| --- | --- | --- | --- |
+| Candidates, over the bound | 15, 0 | 40, 2 | 40, 2 |
+| Output tokens of 12000 | 1494 (12%) | 4307 (36%) | 6206 (52%) |
+| `claimed` / `rebutted` | 1 / 0 | 0 / 0 | 3 / 0 |
+| Raised by code, swapped, lowered | 0, 0, 2 | 0, 0, 0 | 2, 1, 0 |
+
+- **The duel is `claimed`**, raised by code: the Wikipedia support has «сказание» in its own sentence
+  («... согласно литературному произведению XV века - «Сказанию о Мамаевом побоище», - предшествовал
+  Куликовской битве ...»), the imdvor.ru support states it plainly. The other raise: «По «Сказанию о
+  Мамаевом побоище» ... победа осталась за Пересветом» (same marker). Swapped: the «Задонщина»
+  sentence, opening with «Однако», marked `rebutted` by the model; its rebuttal failed the quote check.
+  The thread now says: «По преданию, сражение началось с поединка между русским богатырём Пересветом
+  и ордынским воином Челубеем, закончившегося гибелью обоих. По версии «Сказания о Мамаевом
+  побоище», победа осталась за Пересветом ...»; the bot warned that F21 and F22 are versions.
+- **False positives:** none. No plain fact became `claimed` in the three extractions; both raises
+  are the legend. Replaying the recorded round 1 Kulikovo reply through the new code gave the same
+  two raises and the swap, and nothing else.
+- **30 февраля: a regression of this sample.** The myth from Wikipedia is `claimed` («По некоторым
+  источникам, ... якобы существовало 30 февраля»). But the model also wrote a second fact from a
+  site that states the myth as its own conclusion («Таким образом, в Советском Союзе в 1930 и 1931
+  годах существовало 30 февраля»), marked it `claimed` with «По утверждению источника» in its text,
+  and the guard lowered it to `asserted`: the site has no marker. The contradiction pass did not pair
+  it with «30 февраля в нём не было». So this run offers the myth to the writer as a fact to state,
+  with an attribution in its text. The writer and the critic were not run on this case.
+
+Known gaps, open:
+
+- A myth that a page states as its own claim is `asserted` for that page; only the contradiction pass
+  can catch it, and in round 2 it did not. Options: keep `claimed` when the model's text carries an
+  attribution and a fact with the same numbers is `claimed` elsewhere in the set, or show the dispute
+  pass the claimed facts as well with an instruction to pair them. Not decided.
+- The raise errs towards `claimed` for a plain fact next to a legend sentence. None was seen live.
+- Swapped roles without an opener («Судя по «Задонщине» ...») are not detected.
+- Estimates with their attribution in the text stay `asserted` («по оценкам историков, около 80
+  тысяч»).
+
+#### Round 3: a claim against its denial in the contradiction pass
+
+Round 2 left the 30 февраля myth asserted when a page stated it as its own conclusion («Таким
+образом, ... существовало 30 февраля») and the contradiction pass did not pair it with «30 февраля
+в нём не было». The author chose the prompt, not a code heuristic: no code links facts by equal
+numbers.
+
+- **Decided.** The contradiction prompt says that a claim that something was and a claim that it was
+  not (or is refuted) are a contradiction, also when one of them carries an attribution; `[claimed]`
+  lines are compared with the plain facts and the denials. Two neutral examples. The verdict, the
+  withdrawal, and "a sequence of events and a rounded number are not contradictions" stay. The schema
+  is unchanged.
+- **Residual risk, accepted.** A myth that a page gives as its own conclusion, with no marker, is not
+  caught by code reliably. Only the contradiction pass and then the critic (a disputed fact stated as
+  established) can catch it. The decision is not to make the code more complex for it.
+
+Live check, round 3, the recorded snippets, no Tavily credits, 23 DeepSeek calls: 4 extractions of 2
+calls and one of 3 (the Soviet reply was asked again once by the client), of which 2 extractions of
+30 февраля were spent by two failed runs of the test (the first had no recorded query plan for the
+fixed query, the second was the diagnosis); then 7 writer and 5 critic calls for the 30 февраля short
+post and thread, no examples.
+
+- **30 февраля.** The page that states the myth as its conclusion became `disputed` together with «30
+  февраля в нём не было», explanation: «Один факт прямо утверждает, что 30 февраля в советском
+  календаре не было, другой — что в СССР в 1930 и 1931 годах 30 февраля существовало. Это отрицание и
+  утверждение существования одной и той же даты.» The Wikipedia myth was `rebutted`, linked to «В
+  действительности это предложение было отвергнуто». No fact that states the myth was assertable.
+  The thread wrote «В некоторых источниках делают вывод, будто 30 февраля существовало в СССР в 1930 и
+  1931 годах» and the next tweet «Советский революционный календарь действительно использовался в
+  1930 и 1931 годах, но 30 февраля в нём не было»: the myth and its refutation. The short post did not
+  mention it.
+- **Cost: false groups on the same set.** 9 groups and 6 withdrawn. Real: the 30-day calendar
+  "proposed" against "introduced" (two pages disagree), «30 февраля не было» against "every month had
+  30 days", the myth against «не было», "the proposal was rejected" against "introduced".
+  Questionable: "proposed" against "Sovnarkom approved the continuous week and a new calendar". False:
+  «не было 30 февраля» against the abolition in 1940 (the explanation gives a date the first fact does
+  not have), the abolition in 1932 against the final abolition of the continuous week in 1940 (a
+  sequence), "introduced" against «реформу не удалось осуществить» twice (a sequence). Two false
+  groups reached the thread as «другие источники с этим не согласны» and «По одним данным, в 1932
+  году ... По другим, ... в 1940 году. Источники расходятся».
+- **Kulikovo:** 2 groups, none withdrawn. The duel: «оба погибли» (plain and «Сказание»), «победа
+  осталась за Пересветом» and «Задонщина: Пересвет был жив». Real for «Задонщина» against the death in
+  the duel; the «Сказание» facts do not contradict each other, so the group is wider than the
+  contradiction. The army of Mamai, 20-30, 70-90 and about 80 thousand: real.
+- **Soviet daily life:** no groups, none withdrawn.
+
+Known gaps, open:
+
+- The pass over-reports on a set full of plans, introductions and abolitions (a sequence read as a
+  contradiction, an explanation that adds a date). A false group makes the writer say that sources
+  disagree where they do not. Seen before HIS-21 and again here; not addressed.
+- A group can be wider than the contradiction: facts that agree with each other are pulled in with
+  the one that denies them.
 
 ### Wikipedia extracts
 

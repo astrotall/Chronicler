@@ -9,6 +9,8 @@ from app.prompts.writing import (
     BLOCK_SEPARATOR,
     DISPUTES_BLOCK,
     LINE_SEPARATOR,
+    assertable_facts,
+    attributed_block,
     dispute_blocks,
     disputed_ids,
     fact_lines,
@@ -25,10 +27,13 @@ CRITIC_SYSTEM_PROMPT = (
     "cause or a consequence, a claim of importance or of what an event changed or did not "
     "change («Победа на Дону не отменила ни ордынской силы»); an added qualifier that changes "
     "the standing of a fact («По преданию», «по легенде», «говорят» when the fact states the "
-    "event plainly); an added precision or emphasis that no fact gives («Место известно "
-    "точно», «Уже в 1382 году» adds the meaning 'soon after', «всего», «сразу»); an interval "
-    "or a count computed from the facts («через два года»); a disputed fact stated as "
-    "established.\n"
+    "event plainly and is not among the attributed claims); an added precision or emphasis "
+    "that no fact gives («Место известно точно», «Уже в 1382 году» adds the meaning 'soon "
+    "after', «всего», «сразу»); an interval or a count computed from the facts («через два "
+    "года»); a disputed fact stated as established; an attributed claim (claimed or "
+    "rebutted) stated as a fact, without its attribution («Пересвет вышел на поединок с "
+    "Челубеем» when the fact is [claimed] «По преданию, перед битвой Пересвет бился с "
+    "Челубеем»); a rebutted claim mentioned without its rebuttal.\n"
     "- ambiguous_reference: a pronoun or an omitted subject whose reference is unclear, so "
     "that the sentence can be read as a claim the facts do not state. Example: «Сошлись "
     "войска. Вёл их князь Дмитрий» reads as if Dmitry led both armies, while the facts say "
@@ -54,6 +59,8 @@ CRITIC_SYSTEM_PROMPT = (
     "- two facts put next to each other without a stated cause or consequence;\n"
     "- cautious wording for a disputed fact («по одним данным ..., по другим ...», "
     "«источники расходятся»);\n"
+    "- the attribution of an attributed claim («По преданию, ...», «Принято считать, что "
+    "...», «Часто пишут, что ...; на деле ...»): such a claim must carry it;\n"
     "- punctuation, dashes, emoji, hashtags, a closing question, the length and the digits "
     "of numbers: code checks them;\n"
     "- the opening hook, the rhythm of sentences and the structure of a thread: they are not "
@@ -107,10 +114,13 @@ UNVERIFIED_NUMBER_EXPLANATION = "Числа {number} нет ни в одном �
 
 def render_critique(texts: Sequence[str], fact_set: FactSet, max_findings: int) -> list[Message]:
     disputed = disputed_ids(fact_set)
-    assertable = [fact for fact in fact_set.facts if fact.id not in disputed]
+    assertable = assertable_facts(fact_set)
     blocks: list[str] = []
     if assertable:
         blocks.append(CRITIC_FACTS_BLOCK.format(facts=fact_lines(assertable)))
+    attributed = attributed_block(fact_set)
+    if attributed is not None:
+        blocks.append(attributed)
     disputes = dispute_blocks(fact_set, disputed)
     if disputes:
         blocks.append(DISPUTES_BLOCK.format(disputes=BLOCK_SEPARATOR.join(disputes)))
