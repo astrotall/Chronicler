@@ -359,6 +359,12 @@ def warnings(ready: PostReady) -> list[str]:
         found.append(
             messages.REGRESSIONS_REJECTED_TEMPLATE.format(count=result.regressions_rejected)
         )
+    if result.unreported_survivors:
+        found.append(
+            messages.UNREPORTED_SURVIVORS_TEMPLATE.format(count=result.unreported_survivors)
+        )
+    if draft.removed_fragments:
+        found.append(messages.REMOVED_CLAIMS_TEMPLATE.format(count=len(draft.removed_fragments)))
     if draft.dropped_tail:
         found.append(
             messages.DROPPED_TAIL_TEMPLATE.format(

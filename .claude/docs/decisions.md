@@ -536,6 +536,175 @@ rebuttal of F22, F22 rebutted, F23 claimed: 11 assertable and 2 attributed units
   Донской only in one thread. Soviet: 10 of the 21 assertable facts were not offered, none of them
   evaluated for importance (the selection is positional).
 
+### Surviving fragments (HIS-41)
+
+The live HIS-40 and HIS-42 runs (threads, 3 samples on each of two fact sets) used both style
+regenerations in every sample and still delivered `unsupported_claim` findings such as «Тот же
+график привёл к росту брака» and «Карточную систему отменят уже в 1935». The revision instruction
+asked the writer to fix the flagged fragments; a writer that wants to keep the sentence rewords it
+with the same added meaning («По преданию» became «как утверждают», then «В источниках встречается
+утверждение»), and the critic flags the new wording again.
+
+Decided (the owner approved the plan before the implementation):
+
+- **The revision wording lives only in `render_style_revision`.** `REVISION_BLOCK` in
+  `app/prompts/writing.py` is shared with the author's button revisions (`revisions.py`), where
+  "delete the flagged sentence" would be wrong, so it is untouched. For `unsupported_claim`,
+  `filler`, `cliche` and `ambiguous_reference` the instruction says: delete the sentence or restate
+  it exactly as the fact says, rewording that keeps the added meaning is not a fix, two neutral
+  examples. The other rules keep the old wording.
+- **A survival check in code after each accepted regeneration** (`claim_survival.py`, see
+  [pipeline.md](pipeline.md), step 5): exact (normalised as in the quote check) or near (content
+  stems, `STYLE_FRAGMENT_OVERLAP` 0.75, at least `STYLE_FRAGMENT_MIN_STEMS` 5 stems, otherwise exact
+  only), over all parts of a thread. A survivor is named again, with a demand to delete it.
+  Only a verbatim survivor keeps the loop going on its own; a near copy is named when a
+  regeneration happens anyway (owner's decision: a near copy is a weaker signal and must not cost a
+  round alone). Survivors are counters and instruction input, not `StyleReport` violations, so the
+  choice of the best version and the regression guard are unchanged.
+- **Attribution is exempt** (`attribution_exemption.py`): a stance marker in the sentence and a
+  claimed, rebutted or disputed fact as its best match (0.5 of its stems). One module and one call
+  in `style_review.py`, so it can be removed when HIS-35 lands. Known limit: the lists in
+  `app/config/stance.py` do not contain «по одним данным» or «источники расходятся», so
+  dispute-style wording is exempt only if it also carries a listed marker; the lists were not
+  changed because that alters the HIS-32 stance extraction.
+- **A last-resort step, `STYLE_DROP_SURVIVING_CLAIMS` (default off)**: after the best version is
+  chosen, a sentence that the critic flagged in that version and that survived is cut by code.
+  Never for `short`, never a sentence found only by the overlap check, whole sentences only (the
+  excerpt must cover 0.8 of the sentence's stems), a whole tweet only above the thread minimum, a
+  long post never below `LONG_MIN_CHARS`, the regression tolerance of HIS-30 as a total cap, never
+  an attribution. Recorded in `Draft.removed_fragments`; the log and the bot show a number. It
+  stays off by default because it changes the text and the critic does not see the result.
+- **Defaults and who chose them:** 0.75 and the constants (stems of 5 letters, words of 4 or more
+  letters, 5 stems minimum, 0.8 coverage, 0.5 attribution match) were chosen by the implementer from
+  the 6 "before" samples below and the "after" run; they are not tuned on more data.
+
+Calibration of 0.75. The score of a flagged fragment is the share of its content stems found in
+the closest sentence of the next version, over all fragments flagged in one round and checked
+against the version written next. 81 fragments in the three live runs (27 before, 32 and 22 after).
+Hand labels (the implementer's reading, not a ground truth) of the 56 with at least 5 stems and a
+score of 0.4 or more: S = the same added meaning is still there, F = a real fix.
+
+| Score | S | F | unclear |
+| --- | --- | --- | --- |
+| 1.00 | 11 | 0 | 0 |
+| 0.85 to 0.99 | 7 | 2 | 2 |
+| 0.75 to 0.84 | 5 | 1 | 2 |
+| 0.60 to 0.74 | 4 | 5 | 2 |
+| 0.40 to 0.59 | 0 | 15 | 0 |
+
+At or above 0.75: 22 S, 3 F, 4 unclear; below it 4 S were missed. The two bands overlap, so no
+threshold separates them: 0.6 would add 4 S and 5 F, 0.85 would drop 5 S. The false survivors at
+the top are a fix that keeps most of the old words: a causal connector deleted from a sentence
+(«Из-за этого количество выходных…» became «Количество выходных…», 0.86), an ambiguous subject
+spelled out (0.94). The false negatives are rewordings with other words («В ряде источников … описывают
+как» for «Принято считать, что», 0.73). Left as it is.
+
+Live check (`tests/test_style_claims_live.py`, DeepSeek, thread, the saved sets `his8_kulikovo` and
+`his8_soviet_day_1930s`, 3 samples each, whole `write_draft` and `review_style`, empty examples; the
+recorded rounds are in `data/comparisons/his41_*.json`, local):
+
+| | before | after, last resort off | after, last resort on |
+| --- | --- | --- | --- |
+| Flagged fragments of the four rules, followed by a regeneration | 27 | 32 | 22 |
+| Survived the next version (exact, near) | 11 (3, 8) | 15 (2, 13) | 6 (2, 4) |
+| Residual `unsupported_claim`, `filler`, `cliche` in the chosen drafts (samples) | 3 (3 of 6) | 3 (2 of 6) | 3 (2 of 6) |
+| Fragments removed by code | - | - | 0 |
+| DeepSeek calls (writer + critic) | 34 | 35 | 33 |
+
+- **No measurable improvement at 6 samples per condition.** The share of flagged fragments that
+  survived did not fall (41%, 47%, 27%) and the residual findings are 3, 3 and 3. The runs differ
+  in their first drafts, so the numbers are noise-level evidence.
+- **The residual findings are not survivors.** The "after" runs ended with 7 residual critic
+  findings. None was a survivor of the last regeneration, so the last-resort step had nothing to
+  remove. 3 had not been flagged in any earlier round (a new «по одной из версий, это решило исход
+  битвы», a shortened «Принято считать, что Магнитогорск…» the critic calls incomplete). 4 repeated an
+  earlier finding after a round in which they were gone: the writer removed «и это решило исход
+  битвы» in one regeneration and wrote it back in the next.
+- **The new instruction pushes the writer to hedging.** In one sample the writer answered
+  "restate exactly as the fact says" with added qualifiers («по имеющимся сведениям», «другие
+  источники этого не подтверждают»), the last of which is a new claim. Not fixed here.
+- **The last-resort step never fired (0 of 6 "on" samples).** Its condition, a sentence that the
+  critic flags in the chosen version and that survived, did not hold in any of them: the final
+  critic pass was either clean or flagged other sentences. In two samples verbatim survivors
+  (flagged one round earlier, still in the text) stayed in the delivered text because the last
+  critic pass did not flag them again; nothing reports them. The step is covered by unit tests only.
+
+Known limits: the overlap check is stem-based (no morphology), a fragment with fewer than 5 stems is
+checked for an exact match only; the critic is not deterministic, so a survivor can go unflagged in
+one pass; `used_fact_ids` is not reduced by a removal, so a fact stated only in a removed sentence
+stays listed; the removed text is not re-read by the critic.
+
+#### Second round: deletion only, a wider last resort, a warning
+
+The first round gave no clear improvement and one harm. Told to "delete or restate exactly as the
+fact says", the writer chose the second: it added qualifiers that no fact carries («по имеющимся
+сведениям», «по тем же сведениям», «по одной из версий», «часть источников называет …; другие
+источники этого не подтверждают», the last of which is a new claim). With the old wording and the
+last resort off, 9 such sentences were in the chosen drafts of 3 of 6 samples. None of the 7
+residual findings of that run was a survivor of the last regeneration, so the last resort (survivors
+only) never fired.
+
+Decided (the owner's instruction after reading the first round):
+
+- **Wording.** For `unsupported_claim`, `filler` and `cliche`: delete the flagged sentence (only the
+  clause when just a clause is flagged and the rest is a fact); do not reword, restate or soften
+  it, and put no qualifier or source in its place. The "restate exactly" alternative is gone, the
+  two examples are deletions. For `ambiguous_reference`: name the subject explicitly, do not delete
+  (deleting a sentence is not the fix for a pronoun). `DELETABLE_STYLE_RULES` is now the three
+  rules, so an ambiguous reference is neither a survivor nor removable: a fix that spells out the
+  subject keeps most of the old words and was the worst false survivor (0.94).
+- **Last resort.** Candidates are all critic findings of the chosen version with the three rules,
+  not only survivors. Every other condition of the first round holds (whole sentences, 0.8
+  coverage, never short, never an exempt attribution, never an overlap-only find, thread and long
+  minimums, the regression tolerance as a total cap). Still off by default.
+- **Unreported survivors.** An exact survivor still in the delivered text that no finding of the
+  last critic pass covers is counted in `StyleResult.unreported_survivors`; the bot warns with the
+  number only. Not removed: the critic did not flag it in that version.
+- **Orphaned references: a deterministic guard, not a second critic call.** A removal that would
+  leave a following sentence opening with one of `DANGLING_OPENERS` (это, этот, эта, эти, тот, так,
+  поэтому, потому, таким образом, при этом, однако; `app/config/style.py`) is refused and counted
+  in `removal_blocked`; the check also looks at the first sentence of the next tweet when the cut
+  sentence ends its tweet. A critic call on the cut text would cost one more call per removal, ask
+  the same noisy reader about a text it has just read, and could flag new things that nobody
+  handles after the last regeneration. The guard is free and narrow: it does not see «Он», «Там»,
+  «Тогда», a name that only the cut sentence introduced, or a number the next sentence refers to.
+  The opener list is the owner's; the pronouns were not added because a sentence starting with
+  «Он» is common and the guard would block most removals.
+
+Live check (same sets, thread, 3 samples each, DeepSeek, empty examples; the recorded rounds are in
+`data/comparisons/his41_r2_off_*.json` and `his41_r2_on_*.json`): 30 calls with the step off (16
+writer, 14 critic), 33 with it on (17 writer, 16 critic).
+
+| | before | first round, off | first round, on | now, off | now, on |
+| --- | --- | --- | --- | --- | --- |
+| Residual `unsupported_claim`, `filler`, `cliche` in the chosen drafts (samples) | 3 (3 of 6) | 3 (2 of 6) | 3 (2 of 6) | 4 (4 of 6) | 0 (0 of 6) |
+| Hedge or attribution sentences added by the writer, not carried by a fact, in the chosen draft | 0 | 9 (3 samples) | 0 | 0 | 0 |
+| Same, in an intermediate version | 1 | 9 | 0 | 0 | 1 (cut by the step) |
+| Sentences cut by code | - | - | 0 | - | 2 (2 samples) |
+| Cuts refused by the dangling guard | - | - | - | - | 0 |
+| Unreported survivors in the delivered text | - | - | 2 samples | 0 | 0 |
+
+- **The new wording removed the hedging.** 0 added hedges in the chosen drafts of the step-off run
+  against 9 in the old step-off run. 12 samples per wording is a small base, and the old wording
+  produced no hedge in its step-on run either, so this is a strong sign, not a proof. The residual
+  findings did not fall with the wording alone (4 against 3): they are claims the writer adds
+  between rounds, not flagged ones it keeps.
+- **The step helped on the numbers and cost a fact once.** Residual findings of the three rules:
+  4 with the step off, 0 with it on. Of the 2 sentences cut, one was an added hedge
+  («По одному источнику, … вывел на поле боя засадный полк.») and the cut was clean; the other was
+  «Эксперимент с непрерывной производственной неделей продолжался с 1929 по 1931 год.», which a
+  fact states, flagged by the critic as unsupported. The step took a true fact out because the
+  critic was wrong. A critic false positive is now a deletion, not a warning: the reason to keep
+  the step off by default.
+- **The text after a cut.** Both cut texts read coherently; the second one now mentions
+  «непрерывку» without having introduced the experiment. No dangling reference was created: the
+  «Это …» openers found in final texts (three) were written by the model before the cut and the
+  guard did not have to refuse anything, so the refusal is covered by unit tests only.
+- **What the first-round limits still are:** the critic's false positives (the same experiment
+  sentence, a «(Темир-бей)» it called an invented second name although a fact has it) turn into
+  deletions with the step on; the guard is a list of openers; `used_fact_ids` is not reduced by a
+  cut.
+
 ### Bot delivery
 
 HIS-8 connected the steps in Telegram (see [pipeline.md](pipeline.md), step 6).

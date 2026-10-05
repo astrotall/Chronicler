@@ -76,6 +76,8 @@ def make_style_limits(
     critic_max_findings: int = 10,
     min_retained_chars_ratio: float = 0.6,
     min_retained_facts_ratio: float = 0.6,
+    fragment_overlap: float = 0.75,
+    drop_surviving_claims: bool = False,
 ) -> StyleLimits:
     return StyleLimits(
         critic_enabled=critic_enabled,
@@ -83,6 +85,8 @@ def make_style_limits(
         critic_max_findings=critic_max_findings,
         min_retained_chars_ratio=min_retained_chars_ratio,
         min_retained_facts_ratio=min_retained_facts_ratio,
+        fragment_overlap=fragment_overlap,
+        drop_surviving_claims=drop_surviving_claims,
     )
 
 

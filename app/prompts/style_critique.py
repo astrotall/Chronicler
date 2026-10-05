@@ -1,9 +1,9 @@
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from app.config.style import FILLER_CLOSER_EXAMPLES, OPINION_MAX_PER_POST
 from app.domain.fact import FactSet
 from app.domain.llm import Message, Role
-from app.domain.style import Violation
+from app.domain.style import StyleRule, Violation
 from app.prompts.style_rules import LIST_SEPARATOR, quoted, render_style_rules
 from app.prompts.writing import (
     BLOCK_SEPARATOR,
@@ -84,8 +84,24 @@ REVISION_TEMPLATE = (
     "Fix only the flagged fragments below. The rest of the text stays word for word, the same "
     "length, the same facts, the same order. Do not add facts or claims. Where a sentence "
     "adds a meaning that no fact states, remove that meaning or the sentence, and nothing "
-    "else.\n"
-    "Problems:\n{problems}"
+    "else.{sections}"
+)
+PROBLEMS_SECTION = "\nProblems:\n{lines}"
+DELETE_SECTION = (
+    "\nFlagged sentences. Delete the flagged sentence. If only a clause is flagged and the rest "
+    "of the sentence is stated by a fact, delete only that clause. Do not reword, restate or "
+    "soften what you delete, and do not put a qualifier or a source in its place. Examples: "
+    "«Это была важная веха.» is deleted; in «Мост открыли в 1950 году, и это изменило город "
+    "навсегда.» the clause after the comma is deleted and «Мост открыли в 1950 году.» "
+    "stays.\n{lines}"
+)
+CLARIFY_SECTION = (
+    "\nUnclear references. Name the subject explicitly in the flagged sentence. Do not delete "
+    "the sentence and do not add anything that no fact states.\n{lines}"
+)
+STILL_PRESENT_SECTION = (
+    "\nStill in the text after the last attempt. Delete these sentences, do not reword "
+    "them:\n{lines}"
 )
 FORBIDDEN_TEMPLATE = "\nDo not use these phrases or close variants of them: {phrases}."
 PROBLEM_WITH_PART_TEMPLATE = "- part {part}: «{excerpt}»: {explanation}"
@@ -154,11 +170,39 @@ def problem_line(violation: Violation) -> str:
 
 
 def render_style_revision(
-    violations: Sequence[Violation], forbidden: Sequence[str], *, after_regression: bool = False
+    violations: Sequence[Violation],
+    forbidden: Sequence[str],
+    *,
+    after_regression: bool = False,
+    delete: Collection[Violation] = frozenset(),
+    still_present: Collection[Violation] = frozenset(),
 ) -> str:
-    instruction = REVISION_TEMPLATE.format(
-        problems=LINE_SEPARATOR.join(problem_line(violation) for violation in violations)
-    )
+    persistent = [violation for violation in violations if violation in still_present]
+    deletable = [
+        violation
+        for violation in violations
+        if violation in delete and violation not in still_present
+    ]
+    unclear = [
+        violation for violation in violations if violation.rule is StyleRule.AMBIGUOUS_REFERENCE
+    ]
+    others = [
+        violation
+        for violation in violations
+        if violation not in delete
+        and violation not in still_present
+        and violation.rule is not StyleRule.AMBIGUOUS_REFERENCE
+    ]
+    sections = ""
+    for template, group in (
+        (PROBLEMS_SECTION, others),
+        (DELETE_SECTION, deletable),
+        (CLARIFY_SECTION, unclear),
+        (STILL_PRESENT_SECTION, persistent),
+    ):
+        if group:
+            sections += template.format(lines=LINE_SEPARATOR.join(map(problem_line, group)))
+    instruction = REVISION_TEMPLATE.format(sections=sections)
     if forbidden:
         instruction += FORBIDDEN_TEMPLATE.format(phrases=quoted(forbidden, LIST_SEPARATOR))
     if after_regression:

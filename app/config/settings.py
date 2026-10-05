@@ -42,6 +42,8 @@ from app.config.constants import (
     STATE_DEFAULT_MAX_RUNS,
     STYLE_DEFAULT_CRITIC_ENABLED,
     STYLE_DEFAULT_CRITIC_MAX_FINDINGS,
+    STYLE_DEFAULT_DROP_SURVIVING_CLAIMS,
+    STYLE_DEFAULT_FRAGMENT_OVERLAP,
     STYLE_DEFAULT_MAX_REGENERATIONS,
     STYLE_DEFAULT_MIN_RETAINED_CHARS_RATIO,
     STYLE_DEFAULT_MIN_RETAINED_FACTS_RATIO,
@@ -179,6 +181,8 @@ class Settings(BaseSettings):
     style_min_retained_facts_ratio: float = Field(
         default=STYLE_DEFAULT_MIN_RETAINED_FACTS_RATIO, gt=0, le=1
     )
+    style_fragment_overlap: float = Field(default=STYLE_DEFAULT_FRAGMENT_OVERLAP, gt=0, le=1)
+    style_drop_surviving_claims: bool = STYLE_DEFAULT_DROP_SURVIVING_CLAIMS
 
     post_default_format: PostFormatName = POST_DEFAULT_FORMAT
     thread_min_facts: int = Field(default=THREAD_DEFAULT_MIN_FACTS, ge=1)

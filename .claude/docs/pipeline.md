@@ -562,8 +562,9 @@ links and emoji the two counts match; posts here have no emoji by rule 9.
 ### 5. Style filter
 
 Input: a `Draft`, its `FactSet`, the writing context (limits, examples, angle) and
-`allow_closing_question`. Output: a `StyleResult`. The filter never edits the text itself: it
-finds violations, asks the writer for a new version, and picks which version goes out.
+`allow_closing_question`. Output: a `StyleResult`. The filter does not edit the text: it finds
+violations, asks the writer for a new version, and picks which version goes out. The one exception
+is the optional last-resort step (HIS-41, see "Surviving fragments"), off by default.
 
 `review_style(writer, critic, draft, fact_set, writing_limits, style_limits, examples, *, angle,
 allow_closing_question)` in `app/services/style_review.py`.
@@ -653,7 +654,13 @@ No dependency. Each phrase becomes a regular expression:
 2. If a violation other than `length` remains and the limit `STYLE_MAX_REGENERATIONS` (2) is not
    used up, `write_draft` is called again with the same `FactSet`, format, examples and angle, and a
    `Revision`: the previous texts and an instruction that lists every violation with its part,
-   excerpt and explanation and says to fix only these and keep the rest. The excerpts of phrase
+   excerpt and explanation and says to fix only these and keep the rest. For `unsupported_claim`,
+   `filler` and `cliche` the instruction says to delete the flagged sentence (only the clause when
+   just a clause is flagged and the rest is a fact), and not to reword, restate or soften it, nor
+   to put a qualifier or a source in its place, with two short neutral examples (HIS-41; the first
+   wording also offered "restate it exactly as the fact says", and the writer answered with added
+   hedges). For `ambiguous_reference` the instruction says to name the subject explicitly and not
+   to delete the sentence. The excerpts of phrase
    rules found in this or any earlier attempt (banned phrase, invented experience and every critic
    rule except `ambiguous_reference`) are listed as forbidden, so one stock phrase is not swapped
    for another.
@@ -685,7 +692,61 @@ No dependency. Each phrase becomes a regular expression:
    and below the last accepted version's. A first version that is already below the minimum is not
    punished twice: an equal or larger version is accepted, a smaller one is rejected. Counted and
    handled like any regression. Not applied to `short` and `long`.
-7. **The best version goes out:** the fewest violations of the rules in `DANGEROUS_STYLE_RULES`
+7. **Surviving fragments (HIS-41).** The live HIS-40 and HIS-42 runs showed the writer rewording a
+   flagged sentence with the same added meaning («По преданию» became «как утверждают», then «В
+   источниках встречается утверждение»), so the finding stayed. After each accepted regeneration
+   code checks every flagged fragment of the three deletion rules above (`claim_survival.py`) against all
+   parts of the new text, so a fragment that moved to another tweet is found:
+   - **exact:** the fragment, normalised as in the quote check (case, quote marks, dashes, `ё`,
+     spaces), occurs whole words in a part;
+   - **near:** at least `STYLE_FRAGMENT_OVERLAP` (0.75) of the fragment's content stems occur in one
+     sentence of the new text. A stem is a word of 4 or more letters cut to 5 letters, or any
+     number; a fragment with fewer than 5 stems (`STYLE_FRAGMENT_MIN_STEMS`) is checked for an
+     exact match only, because a short phrase shares its words with any honest fix.
+   A survivor is named again in the next instruction, with the wording of the surviving sentence,
+   under "Still in the text after the last attempt. Delete these sentences, do not reword them".
+   A verbatim survivor keeps the loop going on its own, also when the critic no longer flags it,
+   while the regeneration budget lasts. A near copy is named when a regeneration happens anyway
+   and never starts a round by itself. Survivors are not violations: they are not in
+   `StyleReport`, so the choice of the best version (point 8) does not see them. They are counted
+   per accepted regeneration in `StyleResult.unfixed_per_round`.
+   **Attribution is exempt** (`attribution_exemption.py`, removable as one module with its single
+   call in `style_review.py` when HIS-35 settles the critic's handling of attribution): a flagged
+   sentence that contains a marker of `app/config/stance.py` (claim or rebuttal markers) and whose
+   best match among the offered facts (at least `STYLE_ATTRIBUTION_MIN_FACT_OVERLAP`, 0.5, of its
+   stems) is a claimed, rebutted or disputed fact keeps the plain instruction wording, is never a
+   survivor and is never removed by code. The same words on an asserted fact are not exempt.
+   Counted in `StyleResult.attribution_kept` (findings per round, summed).
+   **The last-resort step** (`STYLE_DROP_SURVIVING_CLAIMS`, default off; `claim_removal.py`). After
+   the best version is chosen, every critic finding of that version with the rule
+   `unsupported_claim`, `filler` or `cliche` is a candidate (since the second HIS-41 round: not only
+   a survivor of the previous regeneration, because the live findings were new or reintroduced
+   ones). The sentence is cut by code. Never for `short`. Never a sentence found only by the
+   overlap check: the critic must have flagged it in the chosen version. Never an exempt
+   attribution. Only whole sentences, and only when the excerpt covers at least
+   `STYLE_REMOVAL_MIN_COVERAGE` (0.8) of the sentence's stems, so a flagged «Уже» never takes its
+   sentence with it. A whole tweet goes only if the thread stays at or above its effective minimum
+   tweet count; a `long` post is never emptied and never cut below `LONG_MIN_CHARS`. The total
+   loss must pass the regression tolerance of point 6 (0.6 of the characters, or at most 100).
+   Paragraph breaks are kept. **A sentence is kept when the next sentence would be left
+   dangling:** if the sentence that follows the cut one (in the same tweet, or the first sentence
+   of the next tweet when the cut one is the last of its tweet) opens with a word of
+   `DANGLING_OPENERS` in `app/config/style.py` (это, этот, эта, эти, тот, так, поэтому, потому,
+   таким образом, при этом, однако), the cut is refused and counted in
+   `StyleResult.removal_blocked`. The critic is not called again on the cut text (one more
+   critic call per removal, on a text it has just reviewed, would be noisy and is the part of the
+   budget the loop already spends); the guard is deterministic and free, and narrow: it does not
+   see «Он», «Там», «Тогда», a name introduced only by the cut sentence, or a number the next
+   sentence refers to. The removed sentences are in `Draft.removed_fragments`; the log and the bot
+   warning carry the count only. The report keeps the findings whose excerpts are still in the
+   text, the code checks and the length and number checks run again. `used_fact_ids` is not
+   reduced (code cannot tell which fact a sentence carried), so a fact that only the removed
+   sentence stated stays listed.
+   **Verbatim survivors that stay unreported.** An exact survivor that is still in the delivered
+   text and that no finding of the last critic pass covers is counted in
+   `StyleResult.unreported_survivors`; the bot warns with the number only. Code does not remove it
+   (the critic did not flag it in that version).
+8. **The best version goes out:** the fewest violations of the rules in `DANGEROUS_STYLE_RULES`
    (`unsupported_claim`, `unverified_number`, `ambiguous_reference`, `invented_experience`, data in
    `app/config/style.py`), then the fewest violations in total, and on a tie the later one. Its
    remaining violations are in `StyleResult.report`; nothing is hidden.
@@ -705,12 +766,16 @@ costs up to 2 extra writer calls.
   `regeneration_failed` is set, and the best of the versions already evaluated goes out with its
   violations.
 - One INFO line per review: format, attempts, chosen attempt, regenerations, whether a
-  regeneration failed, the number of rejected regressions, the critic status of each attempt, the number of violations, dangerous ones,
-  counts per rule name, and the dropped, withdrawn and over-limit findings, then the reasons of
-  the regenerations: `regeneration_triggers` (rule counts of the version regenerated, one group
-  per regeneration, joined by `|`) and `regression_causes` (per rejected regression the kind,
-  `thread_parts`, `thread_facts`, `chars` or `facts`, with `previous>current`; `none` when empty).
-  Texts, excerpts and explanations are never logged.
+  regeneration failed, the number of rejected regressions, the critic status of each attempt, the
+  number of violations, dangerous ones, counts per rule name, and the dropped, withdrawn and
+  over-limit findings, then the reasons of the regenerations: `regeneration_triggers` (rule counts
+  of the version regenerated, survivors named again included, one group per regeneration, joined
+  by `|`) and `regression_causes` (per rejected regression the kind, `thread_parts`,
+  `thread_facts`, `chars` or `facts`, with `previous>current`; `none` when empty). Then
+  `unfixed_per_round` (per accepted regeneration `exact+near`, for example `1+2|0+0`; `none` when
+  nothing was regenerated), `attribution_kept`, `removed_fragments`, `removal_blocked` and
+  `unreported_survivors` (numbers). Texts, excerpts
+  and explanations are never logged.
 
 A rejected regression costs one `write_draft` call and no critic call, and counts in the same
 limit `STYLE_MAX_REGENERATIONS`.

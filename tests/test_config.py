@@ -185,6 +185,8 @@ def test_writing_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.long_min_used_facts == 6
     assert settings.style_min_retained_chars_ratio == 0.6
     assert settings.style_min_retained_facts_ratio == 0.6
+    assert settings.style_fragment_overlap == 0.75
+    assert settings.style_drop_surviving_claims is False
     assert settings.thread_tweet_max_chars == 280
     assert settings.thread_max_tweets == 12
     assert settings.thread_min_tweets == 4
@@ -223,6 +225,8 @@ def test_writing_settings_are_read_from_the_environment(monkeypatch: pytest.Monk
         ("STYLE_MIN_RETAINED_CHARS_RATIO", "0"),
         ("STYLE_MIN_RETAINED_CHARS_RATIO", "1.1"),
         ("STYLE_MIN_RETAINED_FACTS_RATIO", "0"),
+        ("STYLE_FRAGMENT_OVERLAP", "0"),
+        ("STYLE_FRAGMENT_OVERLAP", "1.1"),
         ("THREAD_TWEET_MAX_CHARS", "0"),
         ("THREAD_MAX_TWEETS", "1"),
         ("EXAMPLES_MAX", "-1"),
@@ -320,3 +324,14 @@ def test_the_thread_cap_must_not_be_below_the_thread_gate(
         monkeypatch, THREAD_MAX_FACTS="3", THREAD_MIN_FACTS="3", THREAD_MIN_USED_FACTS="3"
     )
     assert settings.thread_max_facts == 3
+
+
+def test_the_claim_removal_settings_are_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = facts_env(
+        monkeypatch, STYLE_FRAGMENT_OVERLAP="0.9", STYLE_DROP_SURVIVING_CLAIMS="true"
+    )
+
+    assert settings.style_fragment_overlap == 0.9
+    assert settings.style_drop_surviving_claims is True

@@ -117,6 +117,20 @@ CLOSING_QUESTION_MARK = "?"
 DANGEROUS_STYLE_RULES: frozenset[str] = frozenset(
     {"unsupported_claim", "unverified_number", "ambiguous_reference", "invented_experience"}
 )
+DELETABLE_STYLE_RULES: frozenset[str] = frozenset({"unsupported_claim", "filler", "cliche"})
+DANGLING_OPENERS: tuple[str, ...] = (
+    "это",
+    "этот",
+    "эта",
+    "эти",
+    "тот",
+    "так",
+    "поэтому",
+    "потому",
+    "таким образом",
+    "при этом",
+    "однако",
+)
 
 
 class RuleExample(NamedTuple):
