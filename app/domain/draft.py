@@ -81,6 +81,7 @@ class Draft(BaseModel):
     length_violations: list[LengthViolation]
     attempts: int = Field(ge=1)
     dropped_tail: list[DraftText] = Field(default_factory=list)
+    removed_fragments: list[DraftText] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def require_one_part_for_a_single_post(self) -> Self:

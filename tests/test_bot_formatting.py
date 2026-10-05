@@ -87,6 +87,8 @@ def make_ready(
     unverified: list[str] | None = None,
     length: list[LengthViolation] | None = None,
     dropped: list[str] | None = None,
+    removed: list[str] | None = None,
+    unreported: int = 0,
     variant: bool = False,
     downgrade: ThreadDowngrade | None = None,
     failures: list[SourceFailure] | None = None,
@@ -99,6 +101,7 @@ def make_ready(
         length_violations=length or [],
         attempts=1,
         dropped_tail=dropped or [],
+        removed_fragments=removed or [],
     )
     return PostReady(
         draft_id="abcdef012345",
@@ -110,6 +113,7 @@ def make_ready(
             regenerations=0,
             regeneration_failed=regeneration_failed,
             regressions_rejected=regressions_rejected,
+            unreported_survivors=unreported,
         ),
         fact_set=FACT_SET,
         actions=list(PostAction),
@@ -535,6 +539,32 @@ def test_a_rejected_regression_is_warned_about_with_a_count_only() -> None:
     assert found == [messages.REGRESSIONS_REJECTED_TEMPLATE.format(count=2)]
     assert "Правок фильтра стиля отклонено: 2" in found[0]
     assert "слишком сильно сокращали текст, показан предыдущий вариант" in found[0]
+
+
+def test_removed_sentences_are_warned_about_with_a_count_only() -> None:
+    secret = "Тот же график привёл к росту брака."
+
+    found = warnings(make_ready(removed=[secret, "Это решило многое."]))
+
+    assert found == [messages.REMOVED_CLAIMS_TEMPLATE.format(count=2)]
+    assert "Удалено предложений: 2" in found[0]
+    assert secret not in found[0]
+
+
+def test_unreported_survivors_are_warned_about_with_a_count_only() -> None:
+    found = warnings(make_ready(unreported=2))
+
+    assert found == [messages.UNREPORTED_SURVIVORS_TEMPLATE.format(count=2)]
+    assert "отмечал раньше" in found[0]
+    assert ": 2." in found[0]
+
+
+def test_no_unreported_warning_when_there_are_none() -> None:
+    assert not any("отмечал раньше" in line for line in warnings(make_ready()))
+
+
+def test_no_removal_warning_when_nothing_was_removed() -> None:
+    assert not any("Удалено предложений" in line for line in warnings(make_ready()))
 
 
 def test_no_regression_warning_when_nothing_was_rejected() -> None:

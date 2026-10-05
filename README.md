@@ -216,7 +216,11 @@ Every setting with its default is in [`.env.example`](.env.example). The main gr
   `THREAD_MAX_FACTS` (10, at most this many facts are offered to a thread; not below
   `THREAD_MIN_FACTS`; 0 means no cap), `THREAD_MAX_ATTRIBUTED` (2, extra disputes and legends on top
   of the cap; 0 turns them off), `EXAMPLES_DIR`, `EXAMPLES_MAX`.
-- **Style filter:** `STYLE_CRITIC_ENABLED`, `STYLE_MAX_REGENERATIONS` (2), the regression ratios.
+- **Style filter:** `STYLE_CRITIC_ENABLED`, `STYLE_MAX_REGENERATIONS` (2), the regression ratios,
+  `STYLE_FRAGMENT_OVERLAP` (0.75, how close a rewritten sentence must be to a flagged one to count
+  as the same fragment), `STYLE_DROP_SURVIVING_CLAIMS` (false; when true, code cuts the
+  unsupported-claim, filler and cliche sentences the critic still flags in the delivered thread or
+  long post; never for short posts).
 - **Bot:** `POST_DEFAULT_FORMAT`, `THREAD_MIN_FACTS` (5), `PIPELINE_TIMEOUT_SECONDS` (600),
   `STATE_MAX_RUNS` (20).
 

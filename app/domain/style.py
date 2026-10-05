@@ -67,3 +67,7 @@ class StyleResult(BaseModel):
     regenerations: int = Field(ge=0)
     regeneration_failed: bool = False
     regressions_rejected: int = Field(default=0, ge=0)
+    unfixed_per_round: list[int] = Field(default_factory=list)
+    attribution_kept: int = Field(default=0, ge=0)
+    unreported_survivors: int = Field(default=0, ge=0)
+    removal_blocked: int = Field(default=0, ge=0)
