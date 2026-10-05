@@ -186,6 +186,18 @@ async def test_the_critic_sees_parts_rules_facts_and_disputes_but_no_sources() -
     assert UNIQUE_URL_MARK not in user
 
 
+async def test_the_critic_flags_shares_that_no_fact_states() -> None:
+    client = ScriptedLLMClient(NO_FINDINGS)
+
+    await critique_draft(as_client(client), ["Битва шла у Дона."], FACT_SET, 10)
+
+    [(messages, _, _)] = client.calls
+    system = messages[0].content
+    assert "a share, a ratio or a multiple («треть», «половина», «вдвое», «каждый пятый»)" in system
+    assert "a share rounded from a figure of the facts" in system
+    assert "shares that add up to a whole the facts do not give" in system
+
+
 async def test_a_single_post_is_shown_without_numbering() -> None:
     client = ScriptedLLMClient(NO_FINDINGS)
 

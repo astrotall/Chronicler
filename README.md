@@ -209,7 +209,8 @@ Every setting with its default is in [`.env.example`](.env.example). The main gr
   topic costs up to 5), `TAVILY_MAX_RESULTS`, `RESEARCH_ALLOWED_DOMAINS`,
   `RESEARCH_BLOCKED_DOMAINS`.
 - **Facts:** `FACTS_MAX_FACTS` (20), `FACTS_MIN_FACTS` (3), `FACTS_WEAK_DOMAINS`,
-  `FACTS_MAX_PER_DOMAIN` (6), `FACTS_DOMAIN_GROUPS`, `FACTS_RELEVANCE_ENABLED` (true).
+  `FACTS_MAX_PER_DOMAIN` (6), `FACTS_DOMAIN_GROUPS`, `FACTS_RELEVANCE_ENABLED` (true),
+  `QUANTITY_TOLERANCE` (0.10, the relative tolerance when a share or a multiple is matched).
 - **Writing:** `SHORT_MAX_CHARS` (280), `SHORT_MAX_FACTS` (3), `LONG_MIN_CHARS`, `LONG_MAX_CHARS`,
   `THREAD_TWEET_MAX_CHARS`, `THREAD_MAX_TWEETS` (12), `THREAD_MIN_TWEETS` (4),
   `THREAD_MIN_USED_FACTS` (5, not above `THREAD_MIN_FACTS`; 0 turns a minimum off),

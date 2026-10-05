@@ -259,6 +259,8 @@ The full behaviour is in [pipeline.md](pipeline.md), step 3.
 | `app/services/stance.py`        | Pure functions: `parse_stance`, `locate_quote` (the quote's own sentences and its context), `stance_evidence` and `has_stance_evidence` (the guard), `strong_evidence` and `has_strong_evidence` (the raise), `reads_as_rebuttal` (swapped roles); reuse `phrase_pattern` from the style filter |
 | `app/config/stance.py`          | Stance data: `STRONG_CLAIM_MARKERS`, `WEAK_CLAIM_MARKERS`, `CLAIM_MARKERS` (both), `REBUTTAL_OPENERS`, `REBUTTAL_MARKERS`, `STANCE_MARKER_EXACT_WORDS`, `STANCE_CONTEXT_SENTENCES` |
 | `app/services/quote_check.py`   | Pure functions: text normalisation, `check_quote`, `extract_numbers`, `numbers_supported` |
+| `app/services/quantities.py`    | Pure functions for quantity words (HIS-43): `checked_quantities`, `amounts_of`, `quantities_supported` (fact against quotes), `check_post_quantities` (post against facts, with the share-sum guard); reuse `literal` and `fold_word` from the style filter and the digit token of `quote_check.py` |
+| `app/config/quantities.py`      | Quantity data: `QuantityKind`, the Russian and English phrases as stems with explicit endings, the digit forms, the negative contexts and the qualifiers |
 | `app/services/source_domain.py` | Pure functions `source_domain(url, groups)` and `is_weak_source(url, weak_domains)`; reuse `host_matches` from the research orchestrator |
 | `app/services/fact_selection.py`| Pure functions: the three-step priority, the per-domain cap, the floor the cap yields to; `select_facts` returns the kept indices and the counts |
 | `app/prompts/fact_extraction.py`| `render_fact_extraction` and `render_dispute_check`                       |
@@ -300,8 +302,9 @@ full behaviour is in [pipeline.md](pipeline.md), step 4.
 - One `complete_json` call (`WRITING_*_MAX_TOKENS` per format), and one more only when a length
   limit is broken. The second call carries the first reply as an `assistant` turn and the list of
   problems as a `user` turn. It does not use `LLM_JSON_MAX_RETRIES`, which stays for invalid JSON.
-- The number check reuses `extract_numbers` from `app/services/quote_check.py`, and id matching
-  reuses `normalize_label` from `app/services/facts.py`.
+- The number check reuses `extract_numbers` from `app/services/quote_check.py` and
+  `check_post_quantities` from `app/services/quantities.py` (`verify_numbers`, HIS-43), and id
+  matching reuses `normalize_label` from `app/services/facts.py`.
 - One method serves every button of step 6: "короче" and "ещё вариант" pass a `Revision` built
   from `Draft.texts`, "другой заход" passes an angle, "в тред" passes `PostFormat.THREAD`.
 - The generator does not read files. The caller loads the examples with `load_examples` and
@@ -383,6 +386,8 @@ The progress callback is a Protocol taking a `PipelineStage`.
 - The model holds: the Telegram token, the whitelist of Telegram IDs, provider keys, the provider
   per step, model names, source URLs, retry and attempt limits, length limits, the examples
   directory and the number of few-shot examples.
+- `QUANTITY_TOLERANCE` (0.10) is the relative tolerance of a quantity match, used by both number
+  checks through `FactLimits` and `WritingLimits`.
 - The style filter settings are `STYLE_CRITIC_ENABLED`, `STYLE_MAX_REGENERATIONS` and
   `STYLE_CRITIC_MAX_FINDINGS`. The bot settings are `POST_DEFAULT_FORMAT`, `THREAD_MIN_FACTS`,
   `PIPELINE_TIMEOUT_SECONDS` and `STATE_MAX_RUNS`. The format is a plain literal in config and

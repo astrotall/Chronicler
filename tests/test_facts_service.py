@@ -221,6 +221,75 @@ async def test_english_quote_supports_a_russian_fact_with_the_same_number() -> N
     assert texts(extracted(result).fact_set) == [DATE_FACT]
 
 
+VOTE_SITE = make_snippet(
+    "https://vote.example.org/1931",
+    "Партия плуга получила около трети голосов. Партия моста получила 30% голосов. "
+    "Партия реки получила 37,4% голосов.",
+)
+VOTE_EN_SITE = make_snippet(
+    "https://votes.example.com/1931", "About a third of the votes went to the Plough Party."
+)
+VOTE_SNIPPETS = [VOTE_SITE, VOTE_EN_SITE]
+PLOUGH_QUOTE = "Партия плуга получила около трети голосов"
+BRIDGE_QUOTE = "Партия моста получила 30% голосов"
+RIVER_QUOTE = "Партия реки получила 37,4% голосов"
+PLOUGH_EN_QUOTE = "About a third of the votes went to the Plough Party"
+
+
+async def test_a_fact_with_a_share_word_its_quote_states_is_kept() -> None:
+    result, _ = await run(
+        extraction(
+            fact("Около трети голосов получила партия плуга", support("S1", PLOUGH_QUOTE)),
+            fact("Партия моста получила почти треть голосов", support("S1", BRIDGE_QUOTE)),
+            fact("Треть голосов досталась партии плуга", support("S2", PLOUGH_EN_QUOTE)),
+        ),
+        NO_CONFLICTS,
+        snippets=VOTE_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert len(outcome.fact_set.facts) == 3
+    assert outcome.stats.facts_number_mismatch == 0
+
+
+async def test_a_fact_with_a_share_word_no_quote_states_is_dropped() -> None:
+    result, _ = await run(
+        extraction(
+            fact("Партия моста получила половину голосов", support("S1", BRIDGE_QUOTE)),
+            fact("Партия реки получила около трети голосов", support("S1", RIVER_QUOTE)),
+            fact("Партия плуга получила вдвое больше голосов", support("S1", PLOUGH_QUOTE)),
+            fact("Около трети голосов получила партия плуга", support("S1", PLOUGH_QUOTE)),
+        ),
+        snippets=VOTE_SNIPPETS,
+    )
+
+    outcome = extracted(result)
+    assert texts(outcome.fact_set) == ["Около трети голосов получила партия плуга"]
+    assert outcome.stats.facts_number_mismatch == 3
+
+
+async def test_the_quantity_tolerance_comes_from_the_limits() -> None:
+    reply = extraction(fact("Партия реки получила около трети голосов", support("S1", RIVER_QUOTE)))
+
+    strict, _ = await run(reply, snippets=VOTE_SNIPPETS)
+    loose, _ = await run(
+        reply,
+        snippets=VOTE_SNIPPETS,
+        limits=make_limits().model_copy(update={"quantity_tolerance": 0.15}),
+    )
+
+    assert isinstance(strict, InsufficientFacts)
+    assert strict.stats.facts_number_mismatch == 1
+    assert texts(extracted(loose).fact_set) == ["Партия реки получила около трети голосов"]
+
+
+def test_quantity_tolerance_from_settings() -> None:
+    settings = make_settings().model_copy(update={"quantity_tolerance": 0.2})
+
+    assert FactLimits.from_settings(make_settings()).quantity_tolerance == 0.10
+    assert FactLimits.from_settings(settings).quantity_tolerance == 0.2
+
+
 async def test_contradicting_facts_are_disputed_with_an_explanation() -> None:
     result, fake = await run(
         extraction(

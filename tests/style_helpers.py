@@ -46,6 +46,7 @@ def make_draft(
     post_format: PostFormat | None = None,
     *,
     unverified_numbers: Sequence[str] = (),
+    unverified_share_sets: Sequence[Sequence[str]] = (),
     length_violations: Sequence[LengthViolation] = (),
     used_fact_ids: Sequence[str] = ("F1",),
 ) -> Draft:
@@ -55,6 +56,7 @@ def make_draft(
         parts=[DraftPart(text=text) for text in texts],
         used_fact_ids=list(used_fact_ids),
         unverified_numbers=list(unverified_numbers),
+        unverified_share_sets=[list(share_set) for share_set in unverified_share_sets],
         length_violations=list(length_violations),
         attempts=1,
     )

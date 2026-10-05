@@ -106,13 +106,60 @@ Numbers are digit runs in the NFKC text, with separators read as follows:
 Every number of the fact text must be among the numbers of its verified quotes. A fact with no
 numbers passes.
 
+#### Quantity words
+
+Since HIS-43 both number checks also read quantity words (`app/services/quantities.py`, data in
+`app/config/quantities.py`). A quantity has a kind and an exact value (`Fraction`):
+
+- `share`, a part of a whole: половина (1/2), треть (1/3), четверть (1/4), две трети, три четверти,
+  одна пятая, две пятых, пятая, шестая, десятая, сотая часть, третья часть, каждый второй to
+  каждый десятый and каждый сотый (1/N), a cardinal from one to ten in words before процент
+  (пять процентов = 1/20).
+- `multiple`: вдвое to вдесятеро, дважды, трижды, четырежды, два to десять раз(а), полтора раза.
+- `number`: полтора, полторы, полутора (3/2).
+
+Each word is a stem with an explicit tuple of endings (all cases and genders), matched as a whole
+word with case and `ё`/`е` folded (`literal` and `fold_word` of the style filter), after stress
+marks and invisible characters are removed and NFKC is applied. A longer phrase wins over a shorter
+one at the same place (`две трети`, not `трети`; `полтора раза`, not `полтора`). A qualifier
+before a quantity (`около`, `почти`, `более`) is not part of it and is not shown.
+
+Digit forms give support and are never checked as words: `N%` and `N процент...` (`percent`, `per
+cent`) are a share N/100, so `30%` and `30 процентов` are the same 3/10; `N/M` with 0 < N < M <= 100
+is a share; `N раз(а)` and `N times` are a multiple; every digit number is a `number`, so `1,5`
+supports `полтора`. Their digits keep the digit rule above.
+
+A share is not counted in these contexts (data, `app/config/quantities.py`):
+
+1. an ordinal or `последний` right before it: `первой половине`, `вторая половина`, `последняя
+   треть`, `first half`;
+2. a time unit right after it (an English article is skipped): `половина часа`, `четверть века`,
+   `две трети века`, `half an hour`;
+3. clock time: a genitive ordinal or `past` after it: `половина шестого`, `half past`;
+4. `третью`, which is also the ordinal, counts only after a share qualifier (`почти третью`).
+
+Ordinals (`третий`, `третья пятилетка`), names (`Третьяковская`) and `в два разных дня` never match,
+because the endings are explicit.
+
+Two quantities match when they are of the same kind and `|a - b| <= tol * max(a, b)`, with
+`tol = QUANTITY_TOLERANCE` (0.10) as an exact fraction. So `треть` matches `30%` (on the boundary)
+and `33%`, not `37,4%` or `40%`; `половина` matches `45%` (on the boundary), not `40%`. Kinds are
+strict: `дважды` is not supported by a bare `2`, `половина` not by `50` without `%`.
+
+In this step every Russian word quantity of the fact text needs a quantity of the same kind in at
+least one of its verified quotes, otherwise the fact is a `number_mismatch` and is dropped, as for
+digits. Quotes may be English, so English forms are read here as support only: `a`/`one third`,
+`two thirds`, `half`, `a quarter`, `three quarters`, `a fifth` to `a tenth`, `one in N`, `twice`,
+`double(d)`, `triple(d)`, `N-fold`, `N times`, `N percent`, with the same contexts as above.
+
 Known limits:
 
 - `1.500` and `1,500` are read as 1500, never as 1.5.
 - A date written with dots, `08.09.1380`, reads as `8.09` and `1380`, so a fact `8 сентября 1380`
   does not match it and is dropped.
 - A number written in words in the quote does not support digits in the fact: the fact is
-  dropped. Roman numerals (`XIV век`) are not numbers for this check and are not verified.
+  dropped. A quantity word in the quote (`треть`) does not support a digit percent in the fact
+  (`33%`) either. Roman numerals (`XIV век`) are not numbers for this check and are not verified.
 - `1380 300` (a year next to a count) splits into `1380` and `300` only because the left part has
   4 digits; `380 300` would read as one number.
 
@@ -537,6 +584,18 @@ job. An empty `FactSet` is a `ValueError` before any call.
   included, because a post may state both versions. Numbers that are not are listed in
   `Draft.unverified_numbers`. Step 4 itself does not reject or regenerate; step 5 turns every
   such number into a violation that triggers a regeneration (see step 5).
+- **Code checks quantity words** (HIS-43, `verify_numbers`, see "Quantity words" in step 3). Each
+  Russian word quantity of a part needs a quantity of the same kind among the texts of the same
+  facts, within `QUANTITY_TOLERANCE`, as a word or as a digit form. Otherwise its form as written
+  (`трети`, `шестая часть`, never the value) goes to `Draft.unverified_numbers`, after the digits,
+  once per form. A digit form in the post keeps the digit rule: `33%` against a fact «треть» is
+  reported as `33`. English forms are not used for the post.
+- **Share-sum guard.** In one paragraph or one sentence of a part, if 3 or more shares (word forms,
+  `N%`, `N/M`) sum to 1 within the tolerance and at least one of them has no fact share within the
+  tolerance, every member is reported: in `unverified_numbers` and, as one group, in
+  `Draft.unverified_share_sets`. A partly supported picture of the whole («около трети ..., шестая
+  часть ..., около половины ...») is treated as rounded as a whole; this also catches a digit `17%`
+  that passed only because a `17` stands somewhere in the facts.
 - An LLM error or an invalid reply is not caught. One INFO line logs the format and counters:
   parts, facts offered to the model, used facts, unknown ids, unverified numbers, length
   violations, attempts, dropped pieces. Texts are never logged. Each length retry logs one more
@@ -546,10 +605,11 @@ job. An empty `FactSet` is a `ValueError` before any call.
 
 Known limits of the number check:
 
-- Roman numerals (`XIV век`) and numbers written in words (`двенадцать`) are not numbers for
-  `extract_numbers`. A post that writes them is not checked for them. Style rule 15 asks the
-  writer for digits in dates, years, terms, sums, sizes, ages and percentages and forbids computed
-  intervals; small counts in words are allowed and stay unchecked.
+- Roman numerals (`XIV век`) and cardinal numbers written in words (`двенадцать`, `двадцать
+  тысяч`) are not numbers for `extract_numbers`. A post that writes them is not checked for them.
+  Style rule 15 asks the writer for digits in dates, years, terms, sums, sizes, ages and
+  percentages and forbids computed intervals; small counts in words are allowed and stay
+  unchecked. Quantity words are checked since HIS-43, with the limits listed in `decisions.md`.
 - Approximation is not understood: `около 300` matches a fact with `300`, and a fact with `около
   300` matches a post that states exactly `300`.
 - The limits of step 3 apply: `1.500` reads as 1500, a date with dots splits into `8.09` and the
@@ -584,11 +644,12 @@ allow_closing_question)` in `app/services/style_review.py`.
 | `hashtag`             | `#` followed by a word, not after a letter or `&` (`C#`, `&#123;` pass)               |
 | `closing_question`    | The last part ends with `?`, unless the caller allows it. A text that ends with a closing quote (`«Где войско?»`) is quoted speech and passes |
 | `length`              | Each entry of `Draft.length_violations`, as computed by step 4. Never recounted        |
-| `unverified_number`   | Each number of `Draft.unverified_numbers`                                              |
+| `unverified_number`   | Each number of `Draft.unverified_numbers`, except members of a share set; one violation per `Draft.unverified_share_sets` entry that names the whole set and asks to remove the picture of the whole, not one share |
 
 Each violation carries the part (1-based) and an excerpt from the original text: the match, or for
 a dash and an emoji the character with up to `STYLE_EXCERPT_CONTEXT_WORDS` (3) words on each
-side. A length violation has no excerpt, a number violation has the number. The explanation is a
+side. A length violation has no excerpt, a number violation has the number, a share set violation
+has no excerpt and names its shares in the explanation. The explanation is a
 Russian template from `app/prompts/style_critique.py`.
 
 There is no deterministic triplet check: a list of names from the facts ("Армстронг, Олдрин и
@@ -822,7 +883,8 @@ In this order:
    space, a word over it hard. Nothing is added to the pieces, so they copy as the post. The
    buttons are under the last message of the post.
 2. **Warnings**, plain text, only if there are any: a thread turned into a short post, numbers not
-   among the facts (`unverified_numbers`), length violations with the numbers, the remaining style
+   among the facts (`unverified_numbers`, word forms as written), each share set that adds up to a
+   whole (`unverified_share_sets`), length violations with the numbers, the remaining style
    violations (rule, excerpt, tweet, explanation; `length` and `unverified_number` are shown by the
    first two lines and not repeated), the critic did not check the text (`critic = failed`), a
    regeneration failed and the best version is shown, regressions rejected (a count and the
@@ -924,7 +986,7 @@ All of them are Pydantic v2 models and live in `app/domain/`.
 | `LengthViolation`   | `issue` (`part_too_long` or `too_many_parts`), the 1-based `part` or none, `actual` and `limit`            |
 | `SentenceBudget`    | `max_sentences` and `sentence_chars` of a short post, derived from `SHORT_MAX_CHARS` and `SHORT_SENTENCE_CHARS` |
 | `Revision`          | `instruction` and `previous` (the texts of the previous draft's parts), for "короче" and "ещё вариант"    |
-| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers`, `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `length_violations` also holds `too_short` and `too_few_facts` for a long post under its minimum, and `too_few_parts` and `too_few_facts` for a thread under its minimum. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the user copies |
+| `Draft`             | `post_format`, `parts` (exactly one for `short` and `long`), `used_fact_ids`, `unverified_numbers` (digits, then quantity words as written), `unverified_share_sets` (groups of shares that add up to a whole without fact support, HIS-43), `length_violations`, `attempts`, `dropped_tail` (pieces a tail drop removed, empty by default). `length_violations` also holds `too_short` and `too_few_facts` for a long post under its minimum, and `too_few_parts` and `too_few_facts` for a thread under its minimum. `texts` gives the parts without numbering, the one input for the style filter; `rendered` gives what the user copies |
 | `StyleRule`         | The rules a violation names: `dash`, `banned_phrase`, `invented_experience`, `emoji`, `hashtag`, `closing_question`, `length`, `unverified_number` (code) and `cliche`, `triplet`, `filler`, `opinion`, `unsupported_claim`, `ambiguous_reference` (critic; `invented_experience` too) |
 | `Violation`         | `rule`, `source` (`code` or `critic`), `part` (1-based or none), `excerpt` (from the text, none for length), `explanation` in Russian for the user |
 | `StyleReport`       | `violations`, `critic` (`checked`, `disabled`, `failed`), counters of critic findings dropped (excerpt not in the text), withdrawn and over the limit; `passed` is no violations |
@@ -955,6 +1017,7 @@ the domain rules in step 3: language editions of Wikipedia and its mirrors are o
 | Number of search queries                                | Code       | Plain count                                              |
 | Quote occurs in the snippet text                        | Code       | Substring match after normalisation, see step 3          |
 | Numbers of a fact occur in its quotes                   | Code       | Number extraction and set comparison                     |
+| Quantity words of a fact occur in its quotes            | Code       | Stem and ending match, same kind, relative tolerance     |
 | Fact status (domain count)                              | Code       | Counting domains after host rules and groups             |
 | Which facts say the same thing                          | Model      | Needs language understanding                             |
 | Which facts contradict each other                       | Model      | Needs language understanding; code turns the mark into `disputed` |
@@ -964,6 +1027,8 @@ the domain rules in step 3: language editions of Wikipedia and its mirrors are o
 | The attribution or rebuttal is visible next to the quote | Code      | Stem match of the markers in the quote's sentence and its neighbours |
 | An attributed claim is not stated as fact in the post   | Model      | The critic reads the post against the attributed claims block |
 | Numbers and dates in the post occur among the facts     | Code       | Extraction and set comparison                            |
+| Quantity words in the post occur among the facts; shares adding up to a whole are all stated | Code | Stem and ending match, relative tolerance, a sum per sentence and paragraph |
+| A share rounded from a figure, or a picture of the whole | Model     | The critic's `unsupported_claim`                          |
 | Every claim in the post is supported by a fact          | Model      | The critic reads the post against the facts              |
 | The critic's excerpt occurs in the post                 | Code       | Substring match after the quote normalisation            |
 | Dashes, banned phrases, emoji, hashtags, closing question | Code     | Exact patterns and stems, data in `app/config/style.py`  |

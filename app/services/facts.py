@@ -15,6 +15,7 @@ from app.config.constants import (
     FACT_CANDIDATES_MAX,
     FACT_EXTRACTION_MAX_TOKENS,
     FACT_ID_PREFIX,
+    QUANTITY_DEFAULT_TOLERANCE,
     RELEVANCE_CHECK_MAX_TOKENS,
     RELEVANCE_MIN_FACTS,
     SNIPPET_ALIAS_PREFIX,
@@ -48,6 +49,7 @@ from app.services.fact_relevance import (
     score_of,
 )
 from app.services.fact_selection import Selection, select_facts
+from app.services.quantities import quantities_supported
 from app.services.quote_check import QuoteCheck, check_quote, numbers_supported, text_segments
 from app.services.source_domain import is_weak_source, source_domain
 from app.services.stance import (
@@ -147,6 +149,7 @@ class FactLimits(BaseModel):
     max_per_domain: int | None = Field(default=None, ge=1)
     domain_cap_floor: int = Field(default=0, ge=0)
     relevance: bool = False
+    quantity_tolerance: float = Field(default=QUANTITY_DEFAULT_TOLERANCE, ge=0, lt=1)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Self:
@@ -160,6 +163,7 @@ class FactLimits(BaseModel):
             max_per_domain=settings.facts_max_per_domain,
             domain_cap_floor=max(settings.facts_min_facts, settings.thread_min_facts),
             relevance=settings.facts_relevance_enabled,
+            quantity_tolerance=settings.quantity_tolerance,
         )
 
 
@@ -314,9 +318,12 @@ def verify_candidate(
             )
         verdicts.append(verdict)
     stance = parse_stance(candidate.stance) if isinstance(candidate, ExtractedFact) else None
+    quotes = [ref.quote for ref in support]
     if not support:
         outcome = CandidateVerdict.UNSUPPORTED
-    elif not numbers_supported(candidate.text, (ref.quote for ref in support)):
+    elif not numbers_supported(candidate.text, quotes) or not quantities_supported(
+        candidate.text, quotes, limits.quantity_tolerance
+    ):
         outcome = CandidateVerdict.NUMBER_MISMATCH
     elif isinstance(candidate, ExtractedFact) and stance is None:
         outcome = CandidateVerdict.UNKNOWN_STANCE

@@ -134,6 +134,7 @@ FACTS_DEFAULT_DOMAIN_GROUPS: tuple[tuple[str, ...], ...] = (
 )
 FACTS_DEFAULT_MAX_PER_DOMAIN = 6
 FACTS_DEFAULT_RELEVANCE_ENABLED = True
+QUANTITY_DEFAULT_TOLERANCE = 0.10
 FACTS_DEFAULT_WEAK_DOMAINS: tuple[str, ...] = (
     "youtube.com",
     "youtu.be",

@@ -5,6 +5,7 @@ from typing import Annotated, NamedTuple, Self
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.config.constants import (
+    QUANTITY_DEFAULT_TOLERANCE,
     SHORT_DEFAULT_LENGTH_RETRIES,
     SHORT_DEFAULT_MAX_FACTS,
     SHORT_DEFAULT_SENTENCE_CHARS,
@@ -43,6 +44,7 @@ from app.prompts.writing import (
 )
 from app.services.disputes import with_disputed_facts
 from app.services.facts import normalize_label
+from app.services.quantities import check_post_quantities
 from app.services.quote_check import extract_numbers
 from app.services.short_post import (
     drop_tail,
@@ -112,6 +114,7 @@ class WritingLimits(BaseModel):
     thread_min_facts: int = Field(default=0, ge=0)
     thread_max_facts: int = Field(default=0, ge=0)
     thread_max_attributed: int = Field(default=THREAD_DEFAULT_MAX_ATTRIBUTED, ge=0)
+    quantity_tolerance: float = Field(default=QUANTITY_DEFAULT_TOLERANCE, ge=0, lt=1)
 
     @model_validator(mode="after")
     def require_long_range(self) -> Self:
@@ -159,6 +162,7 @@ class WritingLimits(BaseModel):
             thread_min_facts=settings.thread_min_facts,
             thread_max_facts=settings.thread_max_facts,
             thread_max_attributed=settings.thread_max_attributed,
+            quantity_tolerance=settings.quantity_tolerance,
         )
 
     def part_max_chars(self, post_format: PostFormat) -> int:
@@ -347,14 +351,24 @@ def number_order(number: str) -> tuple[float, str]:
     return float(number), number
 
 
-def unverified_numbers(texts: Sequence[str], fact_set: FactSet) -> list[str]:
+class NumberCheck(NamedTuple):
+    unverified: list[str]
+    share_sets: list[list[str]]
+
+
+def verify_numbers(texts: Sequence[str], fact_set: FactSet, tolerance: float) -> NumberCheck:
+    fact_texts = [fact.text for fact in fact_set.facts]
     available: set[str] = set()
-    for fact in fact_set.facts:
-        available |= extract_numbers(fact.text)
+    for fact_text in fact_texts:
+        available |= extract_numbers(fact_text)
     found: set[str] = set()
     for text in texts:
         found |= extract_numbers(text)
-    return sorted(found - available, key=number_order)
+    quantities = check_post_quantities(texts, fact_texts, tolerance)
+    return NumberCheck(
+        unverified=[*sorted(found - available, key=number_order), *quantities.unsupported],
+        share_sets=quantities.share_sets,
+    )
 
 
 def facts_for_prompt(fact_set: FactSet, post_format: PostFormat, limits: WritingLimits) -> FactSet:
@@ -529,24 +543,30 @@ async def write_draft(
             parts = [DraftPart(text=kept)]
             violations = check_length(parts, post_format, limits)
             used = with_disputed_facts(assessment.reported, [kept], prompt_facts)
+    numbers = verify_numbers(
+        [part.text for part in parts], verified_facts, limits.quantity_tolerance
+    )
     draft = Draft(
         post_format=post_format,
         parts=parts,
         used_fact_ids=used,
-        unverified_numbers=unverified_numbers([part.text for part in parts], verified_facts),
+        unverified_numbers=numbers.unverified,
+        unverified_share_sets=numbers.share_sets,
         length_violations=violations,
         attempts=attempts,
         dropped_tail=dropped,
     )
     logger.info(
         "draft written format=%s parts=%d offered_facts=%d used_facts=%d unknown_fact_ids=%d "
-        "unverified_numbers=%d length_violations=%d attempts=%d dropped_tail=%d",
+        "unverified_numbers=%d unverified_share_sets=%d length_violations=%d attempts=%d "
+        "dropped_tail=%d",
         post_format,
         len(draft.parts),
         len(prompt_facts.facts),
         len(used),
         assessment.unknown,
         len(draft.unverified_numbers),
+        len(draft.unverified_share_sets),
         len(violations),
         attempts,
         len(dropped),

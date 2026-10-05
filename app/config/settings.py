@@ -30,6 +30,7 @@ from app.config.constants import (
     OWNER_IDS_SEPARATOR,
     PIPELINE_DEFAULT_TIMEOUT_SECONDS,
     POST_DEFAULT_FORMAT,
+    QUANTITY_DEFAULT_TOLERANCE,
     RESEARCH_DEFAULT_CONNECT_TIMEOUT_SECONDS,
     RESEARCH_DEFAULT_MAX_CONCURRENCY,
     RESEARCH_DEFAULT_READ_TIMEOUT_SECONDS,
@@ -152,6 +153,7 @@ class Settings(BaseSettings):
     )
     facts_max_per_domain: int = Field(default=FACTS_DEFAULT_MAX_PER_DOMAIN, ge=1)
     facts_relevance_enabled: bool = FACTS_DEFAULT_RELEVANCE_ENABLED
+    quantity_tolerance: float = Field(default=QUANTITY_DEFAULT_TOLERANCE, ge=0, lt=1)
 
     short_max_chars: int = Field(default=SHORT_DEFAULT_MAX_CHARS, ge=1)
     short_max_facts: int = Field(default=SHORT_DEFAULT_MAX_FACTS, ge=1)

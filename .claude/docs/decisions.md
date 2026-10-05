@@ -87,6 +87,7 @@ closed. A decision on an open question is recorded here in the same change that 
 | Voice rules 13-16 and the opinion cap from the first live drafts | See "Voice rules from live drafts" below |
 | A first-person opinion: at most 1 per post or thread, in config | "Allowed" was read as "expected": an opinion closed every second tweet. `OPINION_MAX_PER_POST` in `app/config/style.py` |
 | Dates, years, terms, sums, sizes, ages and percentages in digits; small counts may be words | Digits are what the number check sees. "два войска" reads naturally and is not a risk; the risk is a computed interval ("через два года"), which the rule forbids when no fact states it |
+| Quantity words (shares, multiples, «полтора») are numbers for both checks (HIS-43) | A post stated «около трети ..., шестая часть ..., около половины ...», a rounded picture that passed because only digits were read. See "Quantity words (HIS-43)" below |
 | The thread format rule no longer says "each tweet reads on its own" | It pushed the model to close every tweet with a comment. Replaced by "may be one short sentence, needs no closing line, is never a fragment" |
 | Em and en dash forbidden, a spaced hyphen " - " replaces them | The owner's decision. "Replace with a full stop, a comma or a colon" made the model put an awkward comma where the dash was. The rule says the spaced hyphen replaces a dash only, so it does not become a default punctuation mark |
 | Style filter: code checks, then an LLM critic, then up to 2 regenerations | See "Style filter" below |
@@ -705,6 +706,87 @@ writer, 14 critic), 33 with it on (17 writer, 16 critic).
   deletions with the step on; the guard is a list of openers; `used_fact_ids` is not reduced by a
   cut.
 
+### Quantity words (HIS-43)
+
+The problem: a post said that about a third stood for one party, a sixth for another and about a
+half formed the centre. The shares sum to exactly one, a rounded picture from a weak source, and
+the number check passed it because `extract_numbers` reads digits only. The mechanism is in
+[pipeline.md](pipeline.md), "Quantity words" in step 3 and step 4.
+
+Decided:
+
+- **One representation for both checks.** A quantity is a kind (`share`, `multiple`, `number`) and
+  an exact `Fraction`. The forms are data in `app/config/quantities.py`: stems with explicit
+  endings, not a stem with any tail, because `трет\w*` would match `третий` and `Третьяковская`.
+  No dependency.
+- **Tolerance `QUANTITY_TOLERANCE` = 0.10**, relative to the larger value: `|a - b| <= 0.10 *
+  max(a, b)`, computed on exact fractions (the setting is read through its decimal string, so 0.10
+  is exactly 1/10). The owner's anchors, all tests: «около трети» is supported by 30% (on the
+  boundary) and not by 37,4%; «половина» by 45% (on the boundary) and not by 40%; «треть» not by
+  40%. 0.05 would have rejected «почти треть» for 30%, the most common honest rounding; 0.12 would
+  have let 37,4% read as a third.
+- **Direction.** A word in a post or a fact is supported by any form of the same kind in its
+  sources: a word, `N%`, `N процентов`, `N/M`, `N раз`, a digit number for `полтора`. A digit form
+  in a post keeps the digit rule, so `33%` against a fact «треть» is reported: it adds a precision
+  the facts do not have.
+- **Strict kinds.** A share is supported only by a share, a multiple only by a multiple. «Дважды»
+  is not supported by «2 похода», «половина» not by «50» without `%`. The digit check already
+  accepts any equal digit anywhere in the facts; the quantity check does not repeat that looseness.
+- **English forms, support only, fact step only.** Quotes keep the snippet's language, so a fact
+  «около трети» quoted from "about a third" would otherwise be dropped. English forms are never
+  checked and are not read from fact texts in the post check.
+- **Negative contexts, not a "head of a share phrase" rule.** Telling a quantifying head apart
+  needs morphology, so a listed form counts unless an ordinal is before it, a time unit or a clock
+  ordinal is after it, or it is `третью` without a share qualifier. The saved runs had 8
+  occurrences of «во второй половине 1930-х» and similar; none is read as a quantity.
+- **The share-sum guard flags the whole set.** 3 or more shares in one sentence or paragraph that
+  sum to 1 within the tolerance, with at least one unsupported, are all reported and kept as one
+  group (`Draft.unverified_share_sets`). The style filter turns the group into one violation whose
+  explanation names every share and asks to remove the picture of the whole, not one number, and
+  the bot shows the group in one line. A picture where one share happens to match a fact is still
+  rounded as a whole.
+- **Prompts.** Rule 15 says shares and ratios go in digits when a fact gives digits, and forbids
+  rounding a figure into a share and building a picture of the whole; the critic's
+  `unsupported_claim` names the same. The words and the example are data in `app/config/style.py`.
+
+Live check (DeepSeek only, no Tavily, `tests/test_quantities_live.py`, 10 calls: 2 fact
+extraction, 8 writing):
+
+- **Saved runs, code only.** All 54 files in `data/comparisons/`: quantity words were read in 17
+  distinct sentences, all real quantities («почти треть поляков», «две трети советских семей», «шестую часть
+  суши», «каждый десятый», «половину койки», «дважды (в 1368 и в 1370 годах)»). None of the period
+  idioms, ordinals or names was read. One count reads as a multiple by design: «дважды Герой
+  Советского Союза». The saved `his8` posts and threads have no quantity words; their facts have
+  one digit share (28%).
+- **Fact step.** 9 recorded extraction replies (`his32_before/after/after2`, three topics) and 2
+  fresh DeepSeek extractions on the saved research: 384 candidates, 362 with verified quotes. Not
+  one fact text had a Russian quantity word, so the new rule dropped 0. This shows no harm on the
+  saved topics, but it does not measure how strict the rule is on facts that do carry shares.
+- **English support.** The saved English snippets have 5 quantity-like mentions: 3 read as amounts,
+  2 correctly not («second half of the decade», «third-most populous»).
+- **Writer.** A labelled invented fixture (a fictional election: 37,4% and 14,3% in digits, the
+  rest of the votes without a figure), 3 `long` runs: every run kept 37,4% and 14,3% as digits, no
+  share word was written, nothing quantity-related was flagged. One run was flagged for `2` in
+  «Прошло меньше 2 лет», a computed interval caught by the digit rule. Rewrites of the two `his8`
+  sets: `kulikovo` was flagged for `3` in «Само сражение длилось 3 часа» (computed from the 6th to
+  the 9th hour), `soviet_day_1930s` kept 28% and was clean.
+
+Remaining gaps, accepted:
+
+- Cardinal numbers in words (`двадцать тысяч`, `сто человек`) and magnitudes after a word
+  quantity: «полтора миллиона» is checked as 3/2, and a fact `1 500 000` does not support it.
+- Roman-numeral centuries (`XIX век`) are not read.
+- Approximations such as `около сотни`, `несколько тысяч`, `десятки`, `большинство`, `меньшинство`.
+- `пол-` words: `полвека`, `полгода`, `полмиллиона`.
+- Fractions with a numerator above 4 (`пять шестых`), `-кратный`, `в N-ный раз`.
+- A share in a non-quantity sense that no rule catches: `на половине пути`, `лучшая половина`.
+- Time spans in shares (`четверть века`, `половина года`) are ignored, so «четверть века спустя»
+  is not compared with «25 лет».
+- A count read as a multiple: «дважды Герой» is reported unless a fact says «дважды».
+- `disputes.py`, the short-post tail drop guard and the relevance year check still read digits
+  only: a disputed fact stated only in share words is not found by code.
+- The guard looks at one sentence or one paragraph; a picture spread over two tweets is not seen.
+
 ### Bot delivery
 
 HIS-8 connected the steps in Telegram (see [pipeline.md](pipeline.md), step 6).
@@ -1219,14 +1301,17 @@ How the verifier compares a number in the post with the facts.
 - Known limits, accepted for now:
   - Roman-numeral centuries (`XIX век`) are not extracted, so they are neither matched nor
     reported.
-  - Numbers in words (`двенадцать`) are not extracted either: a post that writes a number in
-    words passes the check unseen. Since HIS-21 style rule 15 asks for digits in dates, years,
-    terms, sums, sizes, ages and percentages and forbids computed intervals; small counts in words
-    are allowed and stay unchecked. A rule narrows the gap, it does not close it.
-  - Approximate wording is ignored: `около 300` and `300` are the same number to the check.
+  - Cardinal numbers in words (`двенадцать`, `двадцать тысяч`) are not extracted: a post that
+    writes them passes the check unseen. Since HIS-21 style rule 15 asks for digits in dates,
+    years, terms, sums, sizes, ages and percentages and forbids computed intervals; small counts in
+    words are allowed and stay unchecked. A rule narrows the gap, it does not close it.
+  - Quantity words (shares, multiples, «полтора») are read since HIS-43, with a relative
+    tolerance; their remaining gaps are listed in "Quantity words (HIS-43)".
+  - Approximate wording is ignored: `около 300` and `300` are the same number to the check, and
+    `около трети` is the same share as `треть`. `около сотни` is not read at all.
   - `1.500` reads as 1500; a date with dots splits into the day and month and the year.
 - Since HIS-7 step 5 turns every unverified number into a violation that regenerates the post.
-- Still open: whether Roman numerals and numbers in words get a conversion.
+- Still open: whether Roman numerals and cardinal numbers in words get a conversion.
 
 ### Merged claims
 

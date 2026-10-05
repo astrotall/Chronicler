@@ -344,6 +344,12 @@ def warnings(ready: PostReady) -> list[str]:
             )
         )
     found.extend(
+        messages.UNVERIFIED_SHARE_SET_TEMPLATE.format(
+            shares=messages.NUMBER_SEPARATOR.join(share_set)
+        )
+        for share_set in draft.unverified_share_sets
+    )
+    found.extend(
         length_warning(violation, draft.post_format) for violation in draft.length_violations
     )
     found.extend(

@@ -4,6 +4,7 @@ import pytest
 from app.config import style
 from app.prompts import style_rules
 from app.prompts.style_rules import render_style_rules
+from app.services.quantities import checked_quantities
 
 RULE_NUMBER = re.compile(r"^(\d+)\. ", re.MULTILINE)
 RULE_COUNT = 16
@@ -12,6 +13,7 @@ EXAMPLES = (
     style.DASH_EXAMPLE,
     style.INVENTED_MEANING_EXAMPLE,
     style.NUMBER_DIGITS_EXAMPLE,
+    style.SHARE_DIGITS_EXAMPLE,
 )
 
 
@@ -133,6 +135,22 @@ def test_numbers_in_digits_with_small_counts_allowed_in_words() -> None:
     assert f"Хорошо: «{style.NUMBER_DIGITS_EXAMPLE.good}»" in text
 
 
+def test_shares_in_digits_when_a_fact_gives_digits() -> None:
+    text = rule(15)
+
+    assert "Доли, отношения и кратность («треть», «половина», «вдвое», «каждый пятый»)" in text
+    assert "если факт даёт цифры, пиши цифры" in text
+    assert "не складывай доли в картину целого" in text
+    assert f"Плохо: «{style.SHARE_DIGITS_EXAMPLE.bad}»" in text
+    assert f"Хорошо: «{style.SHARE_DIGITS_EXAMPLE.good}»" in text
+
+
+def test_share_example_is_what_the_number_check_sees() -> None:
+    assert len(checked_quantities(style.SHARE_DIGITS_EXAMPLE.bad)) >= 2
+    assert checked_quantities(style.SHARE_DIGITS_EXAMPLE.good) == []
+    assert all(checked_quantities(word) for word in style.SHARE_WORD_EXAMPLES)
+
+
 def test_thread_structure_rule_keeps_tweets_whole() -> None:
     text = rule(16)
 
@@ -164,7 +182,7 @@ def test_rule_data_is_not_empty() -> None:
         assert example.bad != example.good
 
 
-@pytest.mark.parametrize("example", EXAMPLES, ids=["dash", "meaning", "digits"])
+@pytest.mark.parametrize("example", EXAMPLES, ids=["dash", "meaning", "digits", "shares"])
 def test_good_examples_obey_the_deterministic_rules(example: style.RuleExample) -> None:
     good = example.good.casefold()
 

@@ -1,6 +1,6 @@
 from collections.abc import Collection, Sequence
 
-from app.config.style import FILLER_CLOSER_EXAMPLES, OPINION_MAX_PER_POST
+from app.config.style import FILLER_CLOSER_EXAMPLES, OPINION_MAX_PER_POST, SHARE_WORD_EXAMPLES
 from app.domain.fact import FactSet
 from app.domain.llm import Message, Role
 from app.domain.style import StyleRule, Violation
@@ -30,7 +30,9 @@ CRITIC_SYSTEM_PROMPT = (
     "event plainly and is not among the attributed claims); an added precision or emphasis "
     "that no fact gives («Место известно точно», «Уже в 1382 году» adds the meaning 'soon "
     "after', «всего», «сразу»); an interval or a count computed from the facts («через два "
-    "года»); a disputed fact stated as established; an attributed claim (claimed or "
+    "года»); a share, a ratio or a multiple ({share_words}) that no fact states, a share "
+    "rounded from a figure of the facts, or shares that add up to a whole the facts do not "
+    "give; a disputed fact stated as established; an attributed claim (claimed or "
     "rebutted) stated as a fact, without its attribution («Пересвет вышел на поединок с "
     "Челубеем» when the fact is [claimed] «По преданию, перед битвой Пересвет бился с "
     "Челубеем»); a rebutted claim mentioned without its rebuttal.\n"
@@ -126,7 +128,12 @@ REGRESSION_NOTE = (
     "\nThe previous attempt removed too much: keep all the text and all the facts, and change "
     "only the flagged fragments."
 )
-UNVERIFIED_NUMBER_EXPLANATION = "Числа {number} нет ни в одном факте."
+UNVERIFIED_NUMBER_EXPLANATION = "Числа или доли «{number}» нет ни в одном факте."
+SHARE_SET_EXPLANATION = (
+    "Доли {shares} вместе складываются в целое, и не все они есть в фактах. Убери всю эту "
+    "картину целого, а не одну долю: оставь только доли, которые прямо названы в фактах, "
+    "в том виде, в каком они там стоят."
+)
 
 
 def render_critique(texts: Sequence[str], fact_set: FactSet, max_findings: int) -> list[Message]:
@@ -149,6 +156,7 @@ def render_critique(texts: Sequence[str], fact_set: FactSet, max_findings: int) 
             content=CRITIC_SYSTEM_PROMPT.format(
                 fillers=quoted(FILLER_CLOSER_EXAMPLES, LIST_SEPARATOR),
                 opinion_max=OPINION_MAX_PER_POST,
+                share_words=quoted(SHARE_WORD_EXAMPLES, LIST_SEPARATOR),
                 max_findings=max_findings,
                 style_rules=render_style_rules(),
             ),

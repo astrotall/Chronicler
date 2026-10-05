@@ -104,7 +104,9 @@ marker check in `app/services/stance.py` with its data in `app/config/stance.py`
 claims block of the writer and critic prompts. HIS-27 added the relevance ranking of the facts: the
 pass in `app/services/facts.py`, its models and the period check in `app/services/fact_relevance.py`,
 the order by relevance and aspect in `app/services/fact_selection.py` and the prompt in
-`app/prompts/fact_relevance.py`. `db` does not exist yet.
+`app/prompts/fact_relevance.py`. HIS-43 added quantity words (shares, multiples, «полтора») to
+both number checks: the matching and the share-sum guard in `app/services/quantities.py`, the forms
+in `app/config/quantities.py` and `Draft.unverified_share_sets`. `db` does not exist yet.
 
 ## Detailed guides
 
