@@ -14,12 +14,14 @@ from app.prompts.style_critique import (
     HASHTAG_EXPLANATION,
     INVENTED_EXPERIENCE_EXPLANATION,
     PART_TOO_LONG_EXPLANATION,
+    SHARE_SET_EXPLANATION,
     TOO_FEW_FACTS_EXPLANATION,
     TOO_FEW_PARTS_EXPLANATION,
     TOO_MANY_PARTS_EXPLANATION,
     TOO_SHORT_EXPLANATION,
     UNVERIFIED_NUMBER_EXPLANATION,
 )
+from app.prompts.style_rules import LIST_SEPARATOR, quoted
 from app.services.short_post import split_sentences
 
 PHRASE_TOKEN = re.compile(r"\w+")
@@ -236,7 +238,8 @@ def check_length(draft: Draft) -> list[Violation]:
 
 
 def check_numbers(draft: Draft) -> list[Violation]:
-    return [
+    grouped = {fold_word(form) for share_set in draft.unverified_share_sets for form in share_set}
+    single = [
         code_violation(
             StyleRule.UNVERIFIED_NUMBER,
             UNVERIFIED_NUMBER_EXPLANATION.format(number=number),
@@ -244,7 +247,18 @@ def check_numbers(draft: Draft) -> list[Violation]:
             number,
         )
         for number in draft.unverified_numbers
+        if fold_word(number) not in grouped
     ]
+    sets = [
+        code_violation(
+            StyleRule.UNVERIFIED_NUMBER,
+            SHARE_SET_EXPLANATION.format(shares=quoted(share_set, LIST_SEPARATOR)),
+            None,
+            None,
+        )
+        for share_set in draft.unverified_share_sets
+    ]
+    return [*single, *sets]
 
 
 def check_draft(draft: Draft, *, allow_closing_question: bool = False) -> list[Violation]:

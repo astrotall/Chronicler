@@ -256,9 +256,32 @@ async def test_unverified_numbers_trigger_a_regeneration() -> None:
     )
 
     assert len(writer.calls) == 1
-    assert "«2»: Числа 2 нет ни в одном факте." in revision_prompt(writer, 0)
+    assert "«2»: Числа или доли «2» нет ни в одном факте." in revision_prompt(writer, 0)
     assert result.report.passed
     assert result.draft.unverified_numbers == []
+
+
+async def test_a_share_set_is_revised_as_one_picture() -> None:
+    writer = ScriptedLLMClient(single_reply(CLEAN))
+    critic = ScriptedLLMClient(NO_FINDINGS, NO_FINDINGS)
+    picture = "Около трети были за князя, шестая часть против, около половины молчали."
+    forms = ["трети", "шестая часть", "половины"]
+
+    result = await review_style(
+        as_client(writer),
+        as_client(critic),
+        make_draft([f"{CLEAN} {picture}"], unverified_numbers=forms, unverified_share_sets=[forms]),
+        FACT_SET,
+        make_writing_limits(),
+        make_style_limits(),
+    )
+
+    prompt = revision_prompt(writer, 0)
+    assert "- Доли «трети», «шестая часть», «половины» вместе складываются в целое" in prompt
+    assert "Убери всю эту картину целого, а не одну долю" in prompt
+    assert "Числа или доли «трети»" not in prompt
+    assert result.draft.unverified_share_sets == []
+    assert result.report.passed
 
 
 async def test_a_length_violation_alone_does_not_trigger_a_regeneration() -> None:

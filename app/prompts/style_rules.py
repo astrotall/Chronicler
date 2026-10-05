@@ -12,6 +12,8 @@ from app.config.style import (
     NUMBER_DIGITS_EXAMPLE,
     OPINION_CLOSER_EXAMPLE,
     OPINION_MAX_PER_POST,
+    SHARE_DIGITS_EXAMPLE,
+    SHARE_WORD_EXAMPLES,
     SMALL_COUNT_IN_WORDS_EXAMPLE,
     RuleExample,
 )
@@ -52,7 +54,10 @@ STYLE_RULES_TEMPLATE = (
     "Выбирай факты, ставь их рядом и рассказывай живо, но не добавляй смысла: вывод "
     "читатель сделает сам. {meaning_example}\n"
     "15. Даты, годы, сроки, суммы, размеры, возрасты и проценты пиши цифрами, как в фактах: "
-    "так их видит проверка чисел. Малые количества, от одного до десяти, в обычной речи "
+    "так их видит проверка чисел. Доли, отношения и кратность ({share_words}) проверяются "
+    "тоже: если факт даёт цифры, пиши цифры, как в факте, а словами только то, что так и "
+    "сказано в факте. Не округляй цифры фактов в доли и не складывай доли в картину целого, "
+    "которой нет в фактах. {share_example} Малые количества, от одного до десяти, в обычной речи "
     "можно словами ({small_count}). Не высчитывай промежутки, сроки и количества, которых "
     "нет в фактах. {number_example}\n"
     "16. Тред не строится по схеме «один факт на твит и завершающий оборот у каждого». "
@@ -85,6 +90,8 @@ def render_style_rules() -> str:
         cautious=quoted(CAUTIOUS_WORDINGS, LIST_SEPARATOR),
         fillers=quoted(FILLER_CLOSER_EXAMPLES, LIST_SEPARATOR),
         meaning_example=rule_example(INVENTED_MEANING_EXAMPLE),
+        share_words=quoted(SHARE_WORD_EXAMPLES, LIST_SEPARATOR),
+        share_example=rule_example(SHARE_DIGITS_EXAMPLE),
         small_count=QUOTED_TEMPLATE.format(text=SMALL_COUNT_IN_WORDS_EXAMPLE),
         number_example=rule_example(NUMBER_DIGITS_EXAMPLE),
     )

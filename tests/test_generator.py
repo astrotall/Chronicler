@@ -23,12 +23,13 @@ from app.services.generator import (
     SingleReply,
     ThreadReply,
     WritingLimits,
-    unverified_numbers,
+    verify_numbers,
     write_draft,
 )
 from pydantic import ValidationError
 
 from llm_helpers import ScriptedLLMClient, as_client
+from research_helpers import make_settings
 
 DATE_QUOTE = "UNIQUE-QUOTE-DATE: the battle was fought on 8 September 1380"
 WINNER_QUOTE = "UNIQUE-QUOTE-WINNER: войско Дмитрия разбило войско Мамая"
@@ -97,6 +98,10 @@ def make_limits(
 
 LIMITS = make_limits()
 ALL_FACTS_LIMITS = make_limits(short_max_facts=10)
+
+
+def unverified_numbers(texts: list[str], fact_set: FactSet) -> list[str]:
+    return verify_numbers(texts, fact_set, LIMITS.quantity_tolerance).unverified
 
 
 def single(text: str, *fact_ids: str) -> dict[str, object]:
@@ -402,6 +407,75 @@ async def test_unverified_numbers_are_a_warning_not_a_retry() -> None:
     assert draft.unverified_numbers == ["1381"]
     assert draft.attempts == 1
     assert len(fake.calls) == 1
+
+
+VOTE_FACT_SET = FactSet(
+    topic="Выборы 1931 года",
+    facts=[
+        make_fact("F1", "Партия плуга получила 30% голосов.", DATE_QUOTE, FactStatus.SINGLE),
+        make_fact("F2", "Выборы прошли в 1931 году.", DATE_QUOTE, FactStatus.SINGLE),
+    ],
+    disputes=[],
+)
+VOTE_PICTURE = (
+    "В 1931 году около трети голосов получила партия плуга, шестая часть ушла партии "
+    "моста, а около половины досталось центру."
+)
+
+
+def test_about_a_third_is_supported_by_thirty_percent_in_a_fact() -> None:
+    check = verify_numbers(
+        ["В 1931 году около трети голосов получила партия плуга."], VOTE_FACT_SET, 0.10
+    )
+
+    assert check == ([], [])
+
+
+def test_a_share_word_without_a_fact_is_unverified_after_the_digits() -> None:
+    check = verify_numbers(
+        ["В 1932 году вдвое больше голосов, половина голосов."], VOTE_FACT_SET, 0.10
+    )
+
+    assert check.unverified == ["1932", "вдвое", "половина"]
+    assert check.share_sets == []
+
+
+def test_a_picture_of_the_whole_is_flagged_with_every_member() -> None:
+    check = verify_numbers([VOTE_PICTURE], VOTE_FACT_SET, 0.10)
+
+    assert check.unverified == ["трети", "шестая часть", "половины"]
+    assert check.share_sets == [["трети", "шестая часть", "половины"]]
+
+
+async def test_a_draft_carries_word_quantities_and_share_sets_as_a_warning() -> None:
+    fake = ScriptedLLMClient(single(VOTE_PICTURE, "F1", "F2"))
+
+    draft = await write(fake, fact_set=VOTE_FACT_SET)
+
+    assert draft.unverified_numbers == ["трети", "шестая часть", "половины"]
+    assert draft.unverified_share_sets == [["трети", "шестая часть", "половины"]]
+    assert draft.attempts == 1
+    assert len(fake.calls) == 1
+
+
+async def test_the_writer_uses_the_quantity_tolerance_of_its_limits() -> None:
+    text = "Около половины голосов получила партия плуга."
+    loose = LIMITS.model_copy(update={"quantity_tolerance": 0.5})
+
+    strict = await write(ScriptedLLMClient(single(text, "F1")), fact_set=VOTE_FACT_SET)
+    relaxed = await write(
+        ScriptedLLMClient(single(text, "F1")), fact_set=VOTE_FACT_SET, limits=loose
+    )
+
+    assert strict.unverified_numbers == ["половины"]
+    assert relaxed.unverified_numbers == []
+
+
+def test_writing_limits_take_the_quantity_tolerance_from_settings() -> None:
+    settings = make_settings().model_copy(update={"quantity_tolerance": 0.2})
+
+    assert WritingLimits.from_settings(make_settings()).quantity_tolerance == 0.10
+    assert WritingLimits.from_settings(settings).quantity_tolerance == 0.2
 
 
 async def test_a_number_from_the_topic_alone_is_unverified() -> None:

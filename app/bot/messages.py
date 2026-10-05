@@ -120,7 +120,11 @@ ATTRIBUTED_USED_TEMPLATE = (
     "В посте есть версии или опровергнутые утверждения ({ids}): проверь, что они поданы "
     "с оговоркой, а не как факт."
 )
-UNVERIFIED_NUMBERS_TEMPLATE = "Числа, которых нет в фактах: {numbers}. Проверь их или убери."
+UNVERIFIED_NUMBERS_TEMPLATE = "Числа и доли, которых нет в фактах: {numbers}. Проверь их или убери."
+UNVERIFIED_SHARE_SET_TEMPLATE = (
+    "Доли {shares} вместе складываются в целое, и не все они есть в фактах. Похоже на "
+    "округлённую картину: проверь её по фактам или убери целиком."
+)
 NUMBER_SEPARATOR = ", "
 LENGTH_PART_TEMPLATE = "{part}: {actual} символов при лимите {limit}."
 LENGTH_TOO_MANY_PARTS_TEMPLATE = "в треде {actual} твитов при максимуме {limit}."

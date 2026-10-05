@@ -103,6 +103,10 @@ the fact before it, and the thread was one fact per tweet.
     in ordinary speech ("два войска", "четыре вагона"). An interval, term or count that no fact
     states is never computed: "Через два года, в 1382 году" is forbidden when no fact says "2
     years". Roman-numeral centuries ("XIV век") are left as they are and are not checked.
+    Shares, ratios and multiples ("треть", "половина", "вдвое", "каждый пятый") are checked too
+    (HIS-43): when a fact gives digits, the post gives the same digits, and a share in words only
+    where a fact says it in words. A figure of the facts is never rounded into a share, and shares
+    are never added up into a picture of the whole that no fact gives.
 16. **A thread is not "one fact per tweet, each with a closing line".** A tweet may be one plain
     sentence, and related facts may share a tweet. A tweet is still never a fragment: it says who
     and what it is about.
@@ -154,7 +158,7 @@ filter is step 5 in [pipeline.md](pipeline.md).
 | 2 opinion cap and opinion as a closing line   | Critic                                                         |
 | 13 filler sentences                           | Critic                                                         |
 | 14 meaning beyond the facts                   | Critic, reading the post against the facts: conclusions, causes, claims of importance, added qualifiers ("по преданию" on an asserted fact) and precisions ("точно", "уже"), pronouns that change the meaning, and an attributed claim stated as fact or a rebutted one without its rebuttal. The attribution an attributed claim carries is not a defect |
-| 15 numbers in digits                          | Deterministic for digits (the number check of step 4, a violation in step 5); a computed interval in words is an unsupported claim for the critic |
+| 15 numbers in digits                          | Deterministic for digits and for quantity words (the number check of step 4 with a relative tolerance, the share-sum guard, a violation in step 5); a computed interval in words, a share rounded from a figure and a picture of the whole are an unsupported claim for the critic |
 | 1 voice, 7 hook, 8 rhythm, 16 thread structure | Not enforced automatically: prompt and few-shot only          |
 
 A deterministic check is a hard gate. A critic finding is also a gate (it triggers a
@@ -205,6 +209,8 @@ Numbers (rule 15):
 - Плохо: `Через два года, в 1382 году, Тохтамыш сжёг Москву.`
 - Хорошо: `В 1382 году Тохтамыш сжёг Москву.`
 - Допустимо: `На поле сошлись два войска.`
+- Плохо: `Около трети депутатов поддержали закон, шестая часть была против, остальные воздержались.`
+- Хорошо: `Закон поддержали 37,4% депутатов, против было 14,3%.`
 
 Rhythm (rule 8):
 

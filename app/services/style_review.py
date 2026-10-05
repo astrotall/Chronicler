@@ -50,7 +50,7 @@ from app.services.generator import (
     facts_to_verify,
     long_size,
     thread_size,
-    unverified_numbers,
+    verify_numbers,
     write_draft,
 )
 from app.services.style_critic import CriticOutcome, critique_draft, locate_excerpt
@@ -381,6 +381,11 @@ def drop_flagged_claims(
         return Dropped(evaluation, removal.blocked)
     parts = build_parts(removal.texts, draft.post_format, writing_limits)
     used = draft.used_fact_ids
+    numbers = verify_numbers(
+        removal.texts,
+        facts_to_verify(fact_set, offered, draft.post_format),
+        writing_limits.quantity_tolerance,
+    )
     cut = draft.model_copy(
         update={
             "parts": parts,
@@ -389,9 +394,8 @@ def drop_flagged_claims(
                 *check_size(parts, used, long_size(draft.post_format, writing_limits, offered)),
                 *check_thread_size(parts, used, size),
             ],
-            "unverified_numbers": unverified_numbers(
-                removal.texts, facts_to_verify(fact_set, offered, draft.post_format)
-            ),
+            "unverified_numbers": numbers.unverified,
+            "unverified_share_sets": numbers.share_sets,
             "removed_fragments": removal.removed,
         }
     )

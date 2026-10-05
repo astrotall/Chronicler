@@ -85,6 +85,7 @@ def make_ready(
     regeneration_failed: bool = False,
     regressions_rejected: int = 0,
     unverified: list[str] | None = None,
+    share_sets: list[list[str]] | None = None,
     length: list[LengthViolation] | None = None,
     dropped: list[str] | None = None,
     removed: list[str] | None = None,
@@ -98,6 +99,7 @@ def make_ready(
         parts=[DraftPart(text=text) for text in texts or ["Текст поста."]],
         used_fact_ids=used if used is not None else ["F1", "F3", "F4"],
         unverified_numbers=unverified or [],
+        unverified_share_sets=share_sets or [],
         length_violations=length or [],
         attempts=1,
         dropped_tail=dropped or [],
@@ -312,6 +314,19 @@ def test_a_clean_post_has_no_warnings() -> None:
     assert all(m.text != messages.WARNINGS_HEADER for m in post_ready_messages(make_ready()))
 
 
+def test_word_quantities_are_shown_as_written_and_a_share_set_together() -> None:
+    ready = make_ready(
+        unverified=["1382", "трети", "шестая часть", "половины"],
+        share_sets=[["трети", "шестая часть", "половины"]],
+    )
+
+    text = "\n".join(warnings(ready))
+
+    assert "Числа и доли, которых нет в фактах: 1382, трети, шестая часть, половины." in text
+    assert "Доли трети, шестая часть, половины вместе складываются в целое" in text
+    assert "1/3" not in text
+
+
 def test_every_warning_kind_is_shown() -> None:
     critic = Violation(
         rule=StyleRule.CLICHE,
@@ -347,7 +362,7 @@ def test_every_warning_kind_is_shown() -> None:
     found = warnings(ready)
     text = "\n".join(found)
 
-    assert "Числа, которых нет в фактах: 1382, 300." in text
+    assert "Числа и доли, которых нет в фактах: 1382, 300." in text
     assert "Длина, твит 1: 300 символов при лимите 280." in text
     assert "Длина, в треде 13 твитов при максимуме 12." in text
     assert "Штамп «вошла в историю» (твит 2): Штамп." in text

@@ -256,6 +256,33 @@ def test_each_unverified_number_is_a_violation() -> None:
     assert [violation.excerpt for violation in violations] == ["2", "1382"]
 
 
+def test_a_word_quantity_is_a_violation_with_its_form() -> None:
+    draft = make_draft(["Около трети ушло."], unverified_numbers=["трети"])
+
+    [violation] = check_draft(draft)
+
+    assert violation.rule is StyleRule.UNVERIFIED_NUMBER
+    assert violation.excerpt == "трети"
+    assert violation.explanation == "Числа или доли «трети» нет ни в одном факте."
+
+
+def test_a_share_set_is_one_violation_that_names_every_share() -> None:
+    forms = ["трети", "шестая часть", "половины"]
+    draft = make_draft(
+        ["Около трети, шестая часть и около половины. В 1382 году."],
+        unverified_numbers=["1382", "Трети", *forms[1:]],
+        unverified_share_sets=[forms],
+    )
+
+    violations = check_draft(draft)
+
+    assert [violation.excerpt for violation in violations] == ["1382", None]
+    explanation = violations[1].explanation
+    assert "«трети», «шестая часть», «половины»" in explanation
+    assert "складываются в целое" in explanation
+    assert "не одну долю" in explanation
+
+
 def test_an_ampersand_entity_and_a_language_name_are_not_hashtags() -> None:
     assert rules_of(["Код на C# и знак &#123; в тексте."]) == []
 

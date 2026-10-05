@@ -78,6 +78,7 @@ class Draft(BaseModel):
     parts: list[DraftPart] = Field(min_length=1)
     used_fact_ids: list[str]
     unverified_numbers: list[str]
+    unverified_share_sets: list[list[DraftText]] = Field(default_factory=list)
     length_violations: list[LengthViolation]
     attempts: int = Field(ge=1)
     dropped_tail: list[DraftText] = Field(default_factory=list)
